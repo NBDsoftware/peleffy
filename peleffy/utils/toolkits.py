@@ -698,7 +698,7 @@ class RDKitToolkitWrapper(ToolkitWrapper):
 
         mcs = rdFMCS.FindMCS([rdkit_mol1, rdkit_mol2],
                              timeout=timeout,
-                             atomCompare=rdFMCS.AtomCompare.CompareAny,
+                             atomCompare=rdFMCS.AtomCompare.CompareElements,
                              bondCompare=rdFMCS.BondCompare.CompareAny,
                              matchValences=False,
                              ringMatchesRingOnly=True,
@@ -762,45 +762,60 @@ class RDKitToolkitWrapper(ToolkitWrapper):
 
         rdkit_mol1 = deepcopy(molecule1.rdkit_molecule)
         rdkit_mol2 = deepcopy(molecule2.rdkit_molecule)
+        
+        # Always remove hydrogens for finding the best substructure match
+        rdkit_mol1_noH = AllChem.RemoveHs(rdkit_mol1)
+        rdkit_mol2_noH = AllChem.RemoveHs(rdkit_mol2)
+        mcs_mol_noH = self.get_mcs(molecule1, molecule2,
+                                   False, 150)
 
-        if not include_hydrogens:
-            rdkit_mol1 = AllChem.RemoveHs(rdkit_mol1)
-            rdkit_mol2 = AllChem.RemoveHs(rdkit_mol2)
-            mcs_mol = AllChem.RemoveHs(mcs_mol)
+        # Save atom mapping between molecules with and without hydrogen atoms
+        noH_to_mol1_withH_map = dict()
+        idx_noH = 0
+        for atom in rdkit_mol1.GetAtoms():
+            if atom.GetSymbol() != 'H':
+                noH_to_mol1_withH_map[idx_noH] = atom.GetIdx()
+                idx_noH += 1
+        
+        noH_to_mol2_withH_map = dict()
+        idx_noH = 0
+        for atom in rdkit_mol2.GetAtoms():
+            if atom.GetSymbol() != 'H':
+                noH_to_mol2_withH_map[idx_noH] = atom.GetIdx()
+                idx_noH += 1
 
-        # Map atoms between mol1 and MCS mol
-        if rdkit_mol1.HasSubstructMatch(mcs_mol):
-            mol1_subs = rdkit_mol1.GetSubstructMatches(mcs_mol, uniquify=False)
+        # Map atoms between mol1 and MCS mol (without hydrogens)
+        if rdkit_mol1_noH.HasSubstructMatch(mcs_mol_noH):
+            mol1_subs = rdkit_mol1_noH.GetSubstructMatches(mcs_mol_noH, uniquify=False)
+            #print(f"Found {len(mol1_subs)} heavy-atom substructure matches for molecule 1")
         else:
             raise ValueError('RDKit MCS Subgraph molecule 1 search failed')
 
-        # Map atoms between mol2 and MCS mol
-        if rdkit_mol2.HasSubstructMatch(mcs_mol):
-            mol2_subs = rdkit_mol2.GetSubstructMatches(mcs_mol, uniquify=False)
+        # Map atoms between mol2 and MCS mol (without hydrogens)
+        if rdkit_mol2_noH.HasSubstructMatch(mcs_mol_noH):
+            mol2_subs = rdkit_mol2_noH.GetSubstructMatches(mcs_mol_noH, uniquify=False)
+            #print(f"Found {len(mol2_subs)} heavy-atom substructure matches for molecule 2")
         else:
             raise ValueError('RDKit MCS Subgraph molecule 2 search failed')
 
-        """
-        if mcs_mol.HasSubstructMatch(mcs_mol):
-            _ = mcs_mol.GetSubstructMatch(mcs_mol)
-        else:
-            raise ValueError('RDKit MCS Subgraph search failed')
-        """
-
-        # Find best mapping
+        # Find best mapping based on heavy atoms only
         best_mol1_sub = None
         best_mol2_sub = None
         best_rmsd = None
+        #print(f"Evaluating {len(mol1_subs)} x {len(mol2_subs)} combinations for best heavy-atom match")
+        
         for mol1_sub, mol2_sub in itertools.product(mol1_subs, mol2_subs):
-            rmsd = CalcRMS(rdkit_mol1, rdkit_mol2,
+            rmsd = CalcRMS(rdkit_mol1_noH, rdkit_mol2_noH,
                            map=[list(zip(mol1_sub, mol2_sub)), ])
 
             if best_rmsd is None:
                 best_mol1_sub = mol1_sub
                 best_mol2_sub = mol2_sub
                 best_rmsd = rmsd
+                #print(f"Initial best heavy-atom RMSD: {rmsd:.4f}")
 
             elif rmsd < best_rmsd:
+                #print(f'New best heavy-atom RMSD: {rmsd:.4f} (previous: {best_rmsd:.4f})')
                 best_mol1_sub = mol1_sub
                 best_mol2_sub = mol2_sub
                 best_rmsd = rmsd
@@ -808,6 +823,107 @@ class RDKitToolkitWrapper(ToolkitWrapper):
         # Map between the two molecules
         mapping = list(zip(best_mol1_sub, best_mol2_sub))
 
+        # Convert mapping to include hydrogens if needed
+        if include_hydrogens:
+            mapping = [(noH_to_mol1_withH_map[pair[0]],
+                        noH_to_mol2_withH_map[pair[1]]) for pair in mapping]
+
+        # Extend mapping to atoms outside MCS if they overlap exactly
+        closest_distance_threshold = 1.0  # Angstroms
+
+        for atom1 in rdkit_mol1.GetAtoms():
+            closest_atom2 = None
+            closest_distance = None
+            if atom1.GetIdx() in [pair[0] for pair in mapping]:
+                continue  # already mapped
+
+            if not include_hydrogens and atom1.GetSymbol() == 'H':
+                continue  # skip hydrogens if not included
+
+            # Check if atom1 matches any atom in mol2 exactly
+            for atom2 in rdkit_mol2.GetAtoms():
+                if atom2.GetIdx() in [pair[1] for pair in mapping]:
+                    continue  # already mapped
+
+                if not include_hydrogens and atom2.GetSymbol() == 'H':
+                    continue  # skip hydrogens if not included
+
+                # Compute distance between atoms
+                pos1 = rdkit_mol1.GetConformer().GetAtomPosition(atom1.GetIdx())
+                pos2 = rdkit_mol2.GetConformer().GetAtomPosition(atom2.GetIdx())
+
+                # Calculate squared distance between the two points
+                diff_vector = pos1 - pos2
+                squared_distance = diff_vector.LengthSq()
+
+                if closest_distance is None or squared_distance < closest_distance:
+                    closest_distance = squared_distance
+                    closest_atom2 = atom2
+                
+            if closest_distance is not None and closest_distance < closest_distance_threshold**2:
+                # Add to mapping
+                mapping.append((atom1.GetIdx(), closest_atom2.GetIdx()))
+                #print(f'Extended mapping with atom pair: ({atom1.GetIdx()}, {closest_atom2.GetIdx()}) '
+                #      f'with squared distance: {closest_distance:.4f}')
+        
+        # Try to map any remaining hydrogens based on proximity to already mapped heavy atoms
+        if include_hydrogens:
+            for atom1 in rdkit_mol1.GetAtoms():
+                if atom1.GetSymbol() != 'H':
+                    continue  # only consider hydrogens
+
+                if atom1.GetIdx() in [pair[0] for pair in mapping]:
+                    continue  # already mapped
+
+                # Find parent heavy atom
+                bonds = atom1.GetBonds()
+                if len(bonds) != 1:
+                    continue  # skip if not bonded to exactly one atom
+
+                parent_atom1 = bonds[0].GetOtherAtom(atom1)
+                if parent_atom1.GetIdx() not in [pair[0] for pair in mapping]:
+                    continue  # parent not mapped
+
+                # Find corresponding parent in mol2
+                mapped_pair = next((pair for pair in mapping if pair[0] == parent_atom1.GetIdx()), None)
+                if mapped_pair is None:
+                    continue  # no corresponding parent found
+
+                parent_atom2_idx = mapped_pair[1]
+
+                for atom2 in rdkit_mol2.GetAtoms():
+                    if atom2.GetSymbol() != 'H':
+                        continue  # only consider hydrogens
+
+                    if atom2.GetIdx() in [pair[1] for pair in mapping]:
+                        continue  # already mapped
+
+                    # Check if bonded to the same parent
+                    bonds2 = atom2.GetBonds()
+                    if len(bonds2) != 1:
+                        continue
+
+                    parent2 = bonds2[0].GetOtherAtom(atom2)
+                    if parent2.GetIdx() != parent_atom2_idx:
+                        continue  # not bonded to the same parent
+
+                    # Found it, add to mapping
+                    mapping.append((atom1.GetIdx(), atom2.GetIdx()))
+                    #print(f'Extended mapping with hydrogen pair: ({atom1.GetIdx()}, {atom2.GetIdx()})')
+                    break  # move to next hydrogen
+
+
+        # Print mapping 
+        #print("Final atom mapping (mol1_idx, mol2_idx):")
+        #for pair in mapping:
+        #    atom1 = rdkit_mol1.GetAtomWithIdx(pair[0])
+        #    atom2 = rdkit_mol2.GetAtomWithIdx(pair[1])
+        #    atom1_info = atom1.GetPDBResidueInfo()
+        #    atom2_info = atom2.GetPDBResidueInfo()
+        #    atom1_name = atom1_info.GetName() if atom1_info is not None else None
+        #    atom2_name = atom2_info.GetName() if atom2_info is not None else None
+        #    print(f"{pair} : {atom1_name} <-> {atom2_name}")
+        
         return mapping
 
     def draw_mapping(self, molecule1, molecule2, mcs_mol,
