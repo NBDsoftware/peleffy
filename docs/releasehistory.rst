@@ -11,7 +11,7 @@ Releases follow the ``major.minor.micro`` scheme recommended by `PEP440 <https:/
 1.5.2 - Improvements for alchemistry
 ------------------------------------
 
-This is a minor release of peleffy that adds several improvements to the alchemistry module
+This is a minor release of peleffy that adds several improvements to the alchemistry module.
 
 New features
 """"""""""""
