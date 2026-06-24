@@ -8,6 +8,41 @@ Releases follow the ``major.minor.micro`` scheme recommended by `PEP440 <https:/
 * ``micro`` increments represent bugfix releases or improvements in documentation
 
 
+1.6.0 - OBC singularity fix and soft-core potential for alchemistry
+-------------------------------------------------------------------
+
+This is a minor release of peleffy that fixes a critical numerical instability in alchemical
+simulations and adds soft-core potential support for PELE's new soft-core implementation.
+
+Bugfixes
+""""""""
+- ``topology_from_lambda_set`` no longer scales ``born_radius`` or ``SASA_radius`` toward
+  zero for exclusive (mol1-only) and non-native (mol2-only) atoms. Linearly shrinking these
+  radii at intermediate λ caused a singularity in PELE's OBC Born-radius formula
+  (``atomsBornRadiiOffset = gbr − 0.09`` goes negative when ``gbr < 0.09 Å``), destabilising
+  both the vanishing atom's Born radius and the descreening sum of its neighbours.
+  GB decoupling for exclusive/non-native atoms is now handled exclusively via the OBC
+  *scale factor* in the solvent template (``ligandParams_N.txt``), which already ramped to
+  zero correctly via ``obc_parameters_to_file``.
+
+New features
+""""""""""""
+- Soft-core potential support for alchemical impact templates: ``topology_from_lambda_set``
+  now writes the soft-core parameter ``s`` into NBON column 8 (``adjustableParameterAlpha``)
+  for each λ-window. For exclusive (vanishing) atoms ``s = λ_vdw1``; for non-native
+  (appearing) atoms ``s = 1 − λ_vdw2``; mapped core atoms retain ``s = 0`` since their
+  LJ interpolates between two non-zero endpoints. This prevents LJ singularities when
+  σ → 0 and is compatible with PELE's ``adjustableParameterAlpha`` soft-core implementation.
+
+Tests added
+"""""""""""
+- Updated golden values in ``test_atoms_in_alchemical_topology`` to reflect constant
+  ``SASA_radius`` for exclusive/non-native atoms and the new per-λ ``nonpolar_alpha``
+  (soft-core ``s``) values.
+- New ``nonpolar_alpha`` assertions in ``test_fep_lambda`` and ``test_vdw_lambda`` confirm
+  ``s = λ_vdw`` for exclusive atoms and ``s = 1 − λ_vdw`` for non-native atoms.
+
+
 1.5.2 - Improvements for alchemistry
 ------------------------------------
 

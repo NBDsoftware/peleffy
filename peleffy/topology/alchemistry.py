@@ -254,6 +254,51 @@ class Alchemizer(object):
         -------
         alchemical_topology : a peleffy.topology.Topology
             The resulting alchemical topology
+
+        Notes
+        -----
+        GB/OBC radius handling for exclusive and non-native atoms:
+
+        ``born_radius`` and ``SASA_radius`` are intentionally **not** scaled
+        for exclusive atoms (mol1-only) or non-native atoms (mol2-only).
+        Linearly shrinking these radii toward 0 at intermediate lambda causes
+        a singularity in PELE's OBC Born-radius formula::
+
+            atomsBornRadiiOffset = gbr - 0.09
+
+        When ``gbr < 0.09 Å`` the offset goes negative, making
+        ``1 / offset`` diverge and destabilising both the vanishing atom's
+        Born radius and the descreening sum of its neighbours.
+
+        GB decoupling for exclusive/non-native atoms is handled exclusively
+        through the OBC *scale factor* in the solvent template
+        (``ligandParams_N.txt``, written by :meth:`obc_parameters_to_file`),
+        which smoothly ramps to 0 without touching the radius.  Mapped
+        (MCS) atoms are unaffected — their ``born_radius`` and
+        ``SASA_radius`` are still interpolated between the mol1 and mol2
+        values, which is physically correct.
+
+        Soft-core potential (NBON col 8 / ``adjustableParameterAlpha``):
+
+        ``nonpolar_alpha`` is set to ``s = 1 − λ_vdw_eff`` for exclusive and
+        non-native atoms, where ``λ_vdw_eff`` is the fraction of LJ remaining
+        on that atom:
+
+        * **Exclusive atoms** (vanishing): ``λ_vdw_eff = 1 − vdw1_lambda``
+          (apply_lambda uses ``reverse=False`` so the sigma multiplier is
+          ``1 − vdw1_lambda``).  Therefore ``s = vdw1_lambda``: zero when the
+          atom is fully present, one when it has fully vanished.
+        * **Non-native atoms** (appearing): ``λ_vdw_eff = vdw2_lambda``
+          (``reverse=True``).  Therefore ``s = 1 − vdw2_lambda``: one when
+          the atom is not yet present, zero when it is fully coupled.
+        * **Mapped atoms**: ``s = 0``; their LJ interpolates between two
+          non-zero endpoints and never passes through a near-zero region.
+
+        This prevents LJ singularities at intermediate lambda windows where
+        sigma is small.  ``nonpolar_alpha`` is **not** included in the
+        ``apply_lambda`` multiplication for exclusive/non-native atoms — it is
+        set directly so the physical GB ``nonpolar_alpha`` (if any) is replaced
+        by ``s``.
         """
         from copy import deepcopy
 
@@ -266,24 +311,43 @@ class Alchemizer(object):
 
         for atom_idx, atom in enumerate(alchemical_topology.atoms):
             if atom_idx in self._exclusive_atoms:
-                atom.apply_lambda(["sigma", "epsilon", "born_radius",
-                                   "SASA_radius", "nonpolar_gamma",
-                                   "nonpolar_alpha"],
+                # Scale LJ (sigma, epsilon) and nonpolar GB parameters to
+                # zero as the atom is decoupled.
+                # born_radius and SASA_radius are intentionally NOT scaled:
+                # shrinking them toward 0 at intermediate lambda causes a
+                # singularity in PELE's OBC Born-radius formula
+                # (atomsBornRadiiOffset = gbr - 0.09 → negative when gbr<0.09).
+                # GB decoupling for exclusive atoms is handled exclusively via
+                # the OBC scale factor in the solvent template (ligandParams),
+                # which is set to 0 when the atom is fully decoupled.
+                # nonpolar_alpha is NOT included here — it is set directly
+                # below as the soft-core parameter s (see Notes in docstring).
+                atom.apply_lambda(["sigma", "epsilon", "nonpolar_gamma"],
                                   lambda_set.get_lambda_for_vdw1(),
                                   reverse=False)
                 atom.apply_lambda(["charge"],
                                   lambda_set.get_lambda_for_coulomb1(),
                                   reverse=False)
+                # Soft-core s = vdw1_lambda: 0 when atom is fully present,
+                # 1 when it has vanished (sigma → 0). Prevents LJ singularity.
+                atom.set_nonpolar_alpha(lambda_set.get_lambda_for_vdw1())
 
             if atom_idx in self._non_native_atoms:
-                atom.apply_lambda(["sigma", "epsilon", "born_radius",
-                                   "SASA_radius", "nonpolar_gamma",
-                                   "nonpolar_alpha"],
+                # Same rationale as for exclusive atoms above: do not scale
+                # born_radius / SASA_radius to avoid the OBC singularity at
+                # intermediate lambda. GB coupling is handled via the solvent
+                # template scale factor.
+                # nonpolar_alpha is NOT included here — set directly below.
+                atom.apply_lambda(["sigma", "epsilon", "nonpolar_gamma"],
                                   lambda_set.get_lambda_for_vdw2(),
                                   reverse=True)
                 atom.apply_lambda(["charge"],
                                   lambda_set.get_lambda_for_coulomb2(),
                                   reverse=True)
+                # Soft-core s = 1 − vdw2_lambda: 1 when atom is not yet
+                # present (sigma = 0), 0 when it is fully coupled.
+                atom.set_nonpolar_alpha(
+                    1.0 - lambda_set.get_lambda_for_vdw2())
 
             if atom_idx in mol1_mapped_atoms:
                 mol2_idx = mol1_to_mol2_map[atom_idx]

@@ -334,6 +334,7 @@ class TestAlchemistry(object):
         epsilons1 = list()
         SASA_radii1 = list()
         charges1 = list()
+        nonpolar_alphas1 = list()
         bond_spring_constants1 = list()
         angle_spring_constants1 = list()
         proper_constants1 = list()
@@ -345,6 +346,7 @@ class TestAlchemistry(object):
             epsilons1.append(atom.epsilon)
             SASA_radii1.append(atom.SASA_radius)
             charges1.append(atom.charge)
+            nonpolar_alphas1.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._exclusive_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -368,6 +370,7 @@ class TestAlchemistry(object):
         epsilons2 = list()
         SASA_radii2 = list()
         charges2 = list()
+        nonpolar_alphas2 = list()
         bond_spring_constants2 = list()
         angle_spring_constants2 = list()
         proper_constants2 = list()
@@ -379,6 +382,7 @@ class TestAlchemistry(object):
             epsilons2.append(atom.epsilon)
             SASA_radii2.append(atom.SASA_radius)
             charges2.append(atom.charge)
+            nonpolar_alphas2.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._exclusive_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -404,13 +408,22 @@ class TestAlchemistry(object):
             assert (epsilon2 / epsilon1) - (1 - 0.2) < 1e-5, \
                 'Unexpected ratio between epsilons'
 
+        # born_radius and SASA_radius are NOT scaled for exclusive atoms
+        # (fix for OBC singularity at intermediate lambda).
         for SASA_radius1, SASA_radius2 in zip(SASA_radii1, SASA_radii2):
-            assert (SASA_radius2 / SASA_radius1) - (1 - 0.2) < 1e-5, \
-                'Unexpected ratio between SASA radii'
+            assert abs(SASA_radius2 - SASA_radius1) < 1e-5, \
+                'Unexpected change in SASA radii for exclusive atoms'
 
         for charge1, charge2 in zip(charges1, charges2):
             assert (charge2 / charge1) - (1 - 0.2) < 1e-5, \
                 'Unexpected ratio between charges'
+
+        # Soft-core s = vdw1_lambda for exclusive atoms
+        for alpha1, alpha2 in zip(nonpolar_alphas1, nonpolar_alphas2):
+            assert abs(alpha1 - 0.0) < 1e-5, \
+                'Unexpected soft-core s for exclusive atoms at fep=0'
+            assert abs(alpha2 - 0.2) < 1e-5, \
+                'Unexpected soft-core s for exclusive atoms at fep=0.2'
 
         for bond_sc1, bond_sc2 in zip(bond_spring_constants1,
                                       bond_spring_constants2):
@@ -438,6 +451,7 @@ class TestAlchemistry(object):
         epsilons1 = list()
         SASA_radii1 = list()
         charges1 = list()
+        nonpolar_alphas1 = list()
         bond_spring_constants1 = list()
         angle_spring_constants1 = list()
         proper_constants1 = list()
@@ -449,6 +463,7 @@ class TestAlchemistry(object):
             epsilons1.append(atom.epsilon)
             SASA_radii1.append(atom.SASA_radius)
             charges1.append(atom.charge)
+            nonpolar_alphas1.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._non_native_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -472,6 +487,7 @@ class TestAlchemistry(object):
         epsilons2 = list()
         SASA_radii2 = list()
         charges2 = list()
+        nonpolar_alphas2 = list()
         bond_spring_constants2 = list()
         angle_spring_constants2 = list()
         proper_constants2 = list()
@@ -483,6 +499,7 @@ class TestAlchemistry(object):
             epsilons2.append(atom.epsilon)
             SASA_radii2.append(atom.SASA_radius)
             charges2.append(atom.charge)
+            nonpolar_alphas2.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._non_native_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -508,13 +525,22 @@ class TestAlchemistry(object):
             assert (epsilon2 / epsilon1) - 0.4 < 1e-5, \
                 'Unexpected ratio between epsilons'
 
+        # born_radius and SASA_radius are NOT scaled for non-native atoms
+        # (fix for OBC singularity at intermediate lambda).
         for SASA_radius1, SASA_radius2 in zip(SASA_radii1, SASA_radii2):
-            assert (SASA_radius2 / SASA_radius1) - 0.4 < 1e-5, \
-                'Unexpected ratio between SASA radii'
+            assert abs(SASA_radius2 - SASA_radius1) < 1e-5, \
+                'Unexpected change in SASA radii for non-native atoms'
 
         for charge1, charge2 in zip(charges1, charges2):
             assert (charge2 / charge1) - 0.4 < 1e-5, \
                 'Unexpected ratio between charges'
+
+        # Soft-core s = 1 - vdw2_lambda for non-native atoms
+        for alpha1, alpha2 in zip(nonpolar_alphas1, nonpolar_alphas2):
+            assert abs(alpha1 - 0.0) < 1e-5, \
+                'Unexpected soft-core s for non-native atoms at fep=1.0'
+            assert abs(alpha2 - 0.6) < 1e-5, \
+                'Unexpected soft-core s for non-native atoms at fep=0.4'
 
         for bond_sc1, bond_sc2 in zip(bond_spring_constants1,
                                       bond_spring_constants2):
@@ -1998,6 +2024,7 @@ class TestAlchemistry(object):
         epsilons1 = list()
         SASA_radii1 = list()
         charges1 = list()
+        nonpolar_alphas1 = list()
         bond_spring_constants1 = list()
         angle_spring_constants1 = list()
         proper_constants1 = list()
@@ -2009,6 +2036,7 @@ class TestAlchemistry(object):
             epsilons1.append(atom.epsilon)
             SASA_radii1.append(atom.SASA_radius)
             charges1.append(atom.charge)
+            nonpolar_alphas1.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._exclusive_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -2033,6 +2061,7 @@ class TestAlchemistry(object):
         epsilons2 = list()
         SASA_radii2 = list()
         charges2 = list()
+        nonpolar_alphas2 = list()
         bond_spring_constants2 = list()
         angle_spring_constants2 = list()
         proper_constants2 = list()
@@ -2044,6 +2073,7 @@ class TestAlchemistry(object):
             epsilons2.append(atom.epsilon)
             SASA_radii2.append(atom.SASA_radius)
             charges2.append(atom.charge)
+            nonpolar_alphas2.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._exclusive_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -2069,13 +2099,22 @@ class TestAlchemistry(object):
             assert (epsilon2 / epsilon1) - (1 - 0.2) < 1e-5, \
                 'Unexpected ratio between epsilons'
 
+        # born_radius and SASA_radius are NOT scaled for exclusive atoms
+        # (fix for OBC singularity at intermediate lambda).
         for SASA_radius1, SASA_radius2 in zip(SASA_radii1, SASA_radii2):
-            assert (SASA_radius2 / SASA_radius1) - (1 - 0.2) < 1e-5, \
-                'Unexpected ratio between SASA radii'
+            assert abs(SASA_radius2 - SASA_radius1) < 1e-5, \
+                'Unexpected change in SASA radii for exclusive atoms'
 
         for charge1, charge2 in zip(charges1, charges2):
             assert charge2 - charge1 < 1e-5, \
                 'Unexpected ratio between charges'
+
+        # Soft-core s = vdw_lambda for exclusive atoms (vdw_lambda overrides fep)
+        for alpha1, alpha2 in zip(nonpolar_alphas1, nonpolar_alphas2):
+            assert abs(alpha1 - 0.0) < 1e-5, \
+                'Unexpected soft-core s for exclusive atoms at vdw=0'
+            assert abs(alpha2 - 0.2) < 1e-5, \
+                'Unexpected soft-core s for exclusive atoms at vdw=0.2'
 
         for bond_sc1, bond_sc2 in zip(bond_spring_constants1,
                                       bond_spring_constants2):
@@ -2104,6 +2143,7 @@ class TestAlchemistry(object):
         epsilons1 = list()
         SASA_radii1 = list()
         charges1 = list()
+        nonpolar_alphas1 = list()
         bond_spring_constants1 = list()
         angle_spring_constants1 = list()
         proper_constants1 = list()
@@ -2115,6 +2155,7 @@ class TestAlchemistry(object):
             epsilons1.append(atom.epsilon)
             SASA_radii1.append(atom.SASA_radius)
             charges1.append(atom.charge)
+            nonpolar_alphas1.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._non_native_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -2139,6 +2180,7 @@ class TestAlchemistry(object):
         epsilons2 = list()
         SASA_radii2 = list()
         charges2 = list()
+        nonpolar_alphas2 = list()
         bond_spring_constants2 = list()
         angle_spring_constants2 = list()
         proper_constants2 = list()
@@ -2150,6 +2192,7 @@ class TestAlchemistry(object):
             epsilons2.append(atom.epsilon)
             SASA_radii2.append(atom.SASA_radius)
             charges2.append(atom.charge)
+            nonpolar_alphas2.append(atom.nonpolar_alpha)
 
         for bond_idx in alchemizer._non_native_bonds:
             bond = WritableBond(top.bonds[bond_idx])
@@ -2175,13 +2218,22 @@ class TestAlchemistry(object):
             assert (epsilon2 / epsilon1) - 0.2 < 1e-5, \
                 'Unexpected ratio between epsilons'
 
+        # born_radius and SASA_radius are NOT scaled for non-native atoms
+        # (fix for OBC singularity at intermediate lambda).
         for SASA_radius1, SASA_radius2 in zip(SASA_radii1, SASA_radii2):
-            assert (SASA_radius2 / SASA_radius1) - 0.2 < 1e-5, \
-                'Unexpected ratio between SASA radii'
+            assert abs(SASA_radius2 - SASA_radius1) < 1e-5, \
+                'Unexpected change in SASA radii for non-native atoms'
 
         for charge1, charge2 in zip(charges1, charges2):
             assert charge2 - charge1 < 1e-5, \
                 'Unexpected ratio between charges'
+
+        # Soft-core s = 1 - vdw_lambda for non-native atoms
+        for alpha1, alpha2 in zip(nonpolar_alphas1, nonpolar_alphas2):
+            assert abs(alpha1 - 0.0) < 1e-5, \
+                'Unexpected soft-core s for non-native atoms at vdw=1.0'
+            assert abs(alpha2 - 0.8) < 1e-5, \
+                'Unexpected soft-core s for non-native atoms at vdw=0.2'
 
         for bond_sc1, bond_sc2 in zip(bond_spring_constants1,
                                       bond_spring_constants2):
@@ -2833,11 +2885,16 @@ class TestAlchemistry(object):
                                 0.01561134320353,
                                 0.01561134320353, 0.0],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # SASA_radii are NOT scaled for exclusive/non-native atoms
+                               # (fix for OBC Born-radius singularity at intermediate lambda).
+                               # Non-native Cl atom retains its physical mol2 SASA_radius.
                                [1.7403234434725325, 1.7403234434725325,
                                 1.2862907675316397, 1.2862907675316397,
-                                1.2862907675316397, 1.2862907675316397, 0.0],
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=vdw1_lambda for exclusive, s=1-vdw2_lambda for non-native
+                               [0, 0, 0, 0, 0.0, 0.0, 1.0],
                                [-0.106311, -0.106311, 0.053156, 0.053156,
                                 0.053156, 0.053156, -0.0]
                                ),
@@ -2860,12 +2917,15 @@ class TestAlchemistry(object):
                                 0.012489074562824, 0.012489074562824,
                                 0.05312002093054],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # Exclusive H atoms (indices 4,5) and non-native Cl (index 6)
+                               # retain their physical SASA_radii at intermediate lambda.
                                [1.730211930940688, 1.7230115354240885,
                                 1.3597853946713743, 1.2405319697118284,
-                                1.0290326140253119, 1.0290326140253119,
-                                0.33075278064606245],
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=0.2 for exclusive, s=1-0.2=0.8 for non-native
+                               [0, 0, 0, 0, 0.2, 0.2, 0.8],
                                [-0.049028200000000015, -0.1025318,
                                 0.025041800000000003, 0.0589528, 0.0425248,
                                 0.0425248, -0.017483000000000002]
@@ -2889,12 +2949,15 @@ class TestAlchemistry(object):
                                 0.003122268640705999, 0.003122268640705999,
                                 0.21248008372216],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # Exclusive H atoms (indices 4,5) and non-native Cl (index 6)
+                               # retain their physical SASA_radii at intermediate lambda.
                                [1.6998773933451548, 1.6710758112787563,
                                 1.5802692760905777, 1.1032555762523941,
-                                0.2572581535063279, 0.2572581535063279,
-                                1.3230111225842498],
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=0.8 for exclusive, s=1-0.8=0.2 for non-native
+                               [0, 0, 0, 0, 0.2, 0.8, 0.8],
                                [0.12282020000000003, -0.0911942,
                                 -0.05930080000000001, 0.0763432,
                                 0.010631199999999999,
@@ -2917,11 +2980,16 @@ class TestAlchemistry(object):
                                 0.2656001046527, 0.0157, 0.0, 0.0,
                                 0.2656001046527],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # Exclusive H atoms (indices 4,5) retain their physical
+                               # mol1 SASA_radius even at fep_lambda=1.0 (OBC decoupling
+                               # via ligandParams scale, not by shrinking the radius).
                                [1.6897658808133103, 1.6537639032303122,
-                                1.6537639032303122, 1.0574967784325828, 0.0,
-                                0.0, 1.6537639032303122],
+                                1.6537639032303122, 1.0574967784325828,
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=1.0 for exclusive, s=1-1.0=0.0 for non-native
+                               [0, 0, 0, 0, 0.0, 1.0, 1.0],
                                [0.180103, -0.087415, -0.087415, 0.08214,
                                 0.0, 0.0, -0.087415]
                                ),
@@ -2943,11 +3011,16 @@ class TestAlchemistry(object):
                                 0.01561134320353,
                                 0.01561134320353, 0.0],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # SASA_radii are NOT scaled for exclusive/non-native atoms
+                               # (fix for OBC Born-radius singularity at intermediate lambda).
+                               # Non-native Cl atom retains its physical mol2 SASA_radius.
                                [1.7403234434725325, 1.7403234434725325,
                                 1.2862907675316397, 1.2862907675316397,
-                                1.2862907675316397, 1.2862907675316397, 0.0],
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=vdw1_lambda for exclusive, s=1-vdw2_lambda for non-native
+                               [0, 0, 0, 0, 0.0, 0.0, 1.0],
                                [-0.106311, -0.106311, 0.053156, 0.053156,
                                 0.053156, 0.053156, -0.0]
                                ),
@@ -2969,11 +3042,16 @@ class TestAlchemistry(object):
                                 0.01561134320353,
                                 0.01561134320353, 0.0],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # SASA_radii are NOT scaled for exclusive/non-native atoms
+                               # (fix for OBC Born-radius singularity at intermediate lambda).
+                               # Non-native Cl atom retains its physical mol2 SASA_radius.
                                [1.7403234434725325, 1.7403234434725325,
                                 1.2862907675316397, 1.2862907675316397,
-                                1.2862907675316397, 1.2862907675316397, 0.0],
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=0.0 for exclusive, s=1-0.0=1.0 for non-native (vdw=fep=0)
+                               [0, 0, 0, 0, 0.0, 0.0, 1.0],
                                [-0.106311, -0.106311, 0.053156, 0.053156,
                                 0.0, 0.0, -0.0]
                                ),
@@ -2994,11 +3072,16 @@ class TestAlchemistry(object):
                                 0.2656001046527, 0.0157, 0.0, 0.0,
                                 0.2656001046527],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # Exclusive H atoms (indices 4,5) retain their physical
+                               # mol1 SASA_radius even at fep_lambda=1.0 (OBC decoupling
+                               # via ligandParams scale, not by shrinking the radius).
                                [1.6897658808133103, 1.6537639032303122,
-                                1.6537639032303122, 1.0574967784325828, 0.0,
-                                0.0, 1.6537639032303122],
+                                1.6537639032303122, 1.0574967784325828,
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=1.0 for exclusive, s=0.0 for non-native (fep=1.0)
+                               [0, 0, 0, 0, 0.0, 1.0, 1.0],
                                [0.180103, -0.087415, -0.087415, 0.08214,
                                 0.0, 0.0, -0.0]
                                ),
@@ -3019,11 +3102,16 @@ class TestAlchemistry(object):
                                 0.2656001046527, 0.0157, 0.0, 0.0,
                                 0.2656001046527],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # Exclusive H atoms (indices 4,5) retain their physical
+                               # mol1 SASA_radius even at fep_lambda=1.0 (OBC decoupling
+                               # via ligandParams scale, not by shrinking the radius).
                                [1.6897658808133103, 1.6537639032303122,
-                                1.6537639032303122, 1.0574967784325828, 0.0,
-                                0.0, 1.6537639032303122],
+                                1.6537639032303122, 1.0574967784325828,
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=1.0 for exclusive, s=1-1.0=0.0 for non-native
+                               [0, 0, 0, 0, 0.0, 1.0, 1.0],
                                [0.180103, -0.087415, -0.087415, 0.08214,
                                 0.0, 0.0, -0.087415]
                                ),
@@ -3044,11 +3132,16 @@ class TestAlchemistry(object):
                                 0.2656001046527, 0.0157, 0.0, 0.0,
                                 0.2656001046527],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # Exclusive H atoms (indices 4,5) retain their physical
+                               # mol1 SASA_radius even at fep_lambda=1.0 (OBC decoupling
+                               # via ligandParams scale, not by shrinking the radius).
                                [1.6897658808133103, 1.6537639032303122,
-                                1.6537639032303122, 1.0574967784325828, 0.0,
-                                0.0, 1.6537639032303122],
+                                1.6537639032303122, 1.0574967784325828,
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=1.0 for exclusive, s=0.0 for non-native (fep=1.0)
+                               [0, 0, 0, 0, 0.0, 1.0, 1.0],
                                [0.180103, -0.087415, -0.087415, 0.08214,
                                 0.0, 0.0, -0.0]
                                ),
@@ -3069,11 +3162,16 @@ class TestAlchemistry(object):
                                 0.2656001046527, 0.0157, 0.0, 0.0,
                                 0.2656001046527],
                                [0, 0, 0, 0, 0, 0, 0],
+                               # Exclusive H atoms (indices 4,5) retain their physical
+                               # mol1 SASA_radius even at fep_lambda=1.0 (OBC decoupling
+                               # via ligandParams scale, not by shrinking the radius).
                                [1.6897658808133103, 1.6537639032303122,
-                                1.6537639032303122, 1.0574967784325828, 0.0,
-                                0.0, 1.6537639032303122],
+                                1.6537639032303122, 1.0574967784325828,
+                                1.2862907675316397, 1.2862907675316397,
+                                1.6537639032303122],
                                [0, 0, 0, 0, 0, 0, 0],
-                               [0, 0, 0, 0, 0, 0, 0],
+                               # s=1.0 for exclusive, s=0.0 for non-native (vdw=fep=1.0)
+                               [0, 0, 0, 0, 0.0, 1.0, 1.0],
                                [-0.106311, -0.106311, 0.053156, 0.053156,
                                 0.053156, 0.053156, -0.087415]
                                )
