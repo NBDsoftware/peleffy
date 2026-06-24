@@ -829,7 +829,7 @@ class RDKitToolkitWrapper(ToolkitWrapper):
                         noH_to_mol2_withH_map[pair[1]]) for pair in mapping]
 
         # Extend mapping to atoms outside MCS if they overlap exactly
-        closest_distance_threshold = 1.0  # Angstroms
+        closest_distance_threshold = 3.0  # Angstroms
 
         for atom1 in rdkit_mol1.GetAtoms():
             closest_atom2 = None
@@ -848,6 +848,52 @@ class RDKitToolkitWrapper(ToolkitWrapper):
                 if not include_hydrogens and atom2.GetSymbol() == 'H':
                     continue  # skip hydrogens if not included
 
+                # Both atoms must be connected to atoms already in the mapping
+                bonded_to_mapped1 = False
+                for bond in atom1.GetBonds():
+                    other_atom = bond.GetOtherAtom(atom1)
+                    if other_atom.GetIdx() in [pair[0] for pair in mapping]:
+                        bonded_to_mapped1 = True
+                        break
+                if not bonded_to_mapped1:
+                    continue
+
+                bonded_to_mapped2 = False
+                for bond in atom2.GetBonds():
+                    other_atom = bond.GetOtherAtom(atom2)
+                    if other_atom.GetIdx() in [pair[1] for pair in mapping]:
+                        bonded_to_mapped2 = True
+                        break
+                if not bonded_to_mapped2:
+                    continue
+
+                # Connected atoms must be mapped to each other
+                connected_mapped = True
+                for bond1 in atom1.GetBonds():
+                    other_atom1 = bond1.GetOtherAtom(atom1)
+                    if other_atom1.GetIdx() in [pair[0] for pair in mapping]:
+                        # Find the mapped atom2 index corresponding to the mapped atom1 index
+                        mapped_atom2_idx = None
+                        for pair in mapping:
+                            if pair[0] == other_atom1.GetIdx():
+                                mapped_atom2_idx = pair[1]
+                                break
+                        if mapped_atom2_idx is None:
+                            connected_mapped = False
+                            break
+                        # Check if atom2 is bonded to mapped_atom2_idx
+                        bonded = False
+                        for bond2 in atom2.GetBonds():
+                            other_atom2 = bond2.GetOtherAtom(atom2)
+                            if other_atom2.GetIdx() == mapped_atom2_idx:
+                                bonded = True
+                                break
+                        if not bonded:
+                            connected_mapped = False
+                            break
+                if not connected_mapped:
+                    continue
+
                 # Compute distance between atoms
                 pos1 = rdkit_mol1.GetConformer().GetAtomPosition(atom1.GetIdx())
                 pos2 = rdkit_mol2.GetConformer().GetAtomPosition(atom2.GetIdx())
@@ -860,17 +906,23 @@ class RDKitToolkitWrapper(ToolkitWrapper):
                     closest_distance = squared_distance
                     closest_atom2 = atom2
                 
+                #if atom2.GetPDBResidueInfo().GetName().strip() == "Br2":
+                #    print(atom1.GetPDBResidueInfo().GetName().strip(), "Br2", (pos1.x, pos1.y, pos1.z), (pos2.x, pos2.y, pos2.z), squared_distance)
+                
             if closest_distance is not None and closest_distance < closest_distance_threshold**2:
                 # Add to mapping
                 mapping.append((atom1.GetIdx(), closest_atom2.GetIdx()))
                 #print(f'Extended mapping with atom pair: ({atom1.GetIdx()}, {closest_atom2.GetIdx()}) '
                 #      f'with squared distance: {closest_distance:.4f}')
+            elif closest_distance is not None and closest_distance >= closest_distance_threshold**2:
+                print(f'Could not find suitable match for atom {atom1.GetPDBResidueInfo().GetName().strip()} within threshold.')
+
         
-        # Try to map any remaining hydrogens based on proximity to already mapped heavy atoms
+        # Try to map any remaining atom (including hydrogen) based on proximity to already mapped heavy atoms
         if include_hydrogens:
             for atom1 in rdkit_mol1.GetAtoms():
-                if atom1.GetSymbol() != 'H':
-                    continue  # only consider hydrogens
+                #if atom1.GetSymbol() != 'H':
+                #    continue  # only consider hydrogens
 
                 if atom1.GetIdx() in [pair[0] for pair in mapping]:
                     continue  # already mapped
@@ -892,8 +944,8 @@ class RDKitToolkitWrapper(ToolkitWrapper):
                 parent_atom2_idx = mapped_pair[1]
 
                 for atom2 in rdkit_mol2.GetAtoms():
-                    if atom2.GetSymbol() != 'H':
-                        continue  # only consider hydrogens
+                    #if atom2.GetSymbol() != 'H':
+                    #    continue  # only consider hydrogens
 
                     if atom2.GetIdx() in [pair[1] for pair in mapping]:
                         continue  # already mapped

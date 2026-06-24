@@ -91,6 +91,19 @@ class Mapper(object):
                                                  mcs_mol,
                                                  self._include_hydrogens)
 
+        from peleffy.utils import Logger
+
+        logger = Logger()
+        logger.info("Final atom mapping:")
+        for pair in mapping:
+            atom1 = self.molecule1.rdkit_molecule.GetAtomWithIdx(pair[0])
+            atom2 = self.molecule2.rdkit_molecule.GetAtomWithIdx(pair[1])
+            atom1_info = atom1.GetPDBResidueInfo()
+            atom2_info = atom2.GetPDBResidueInfo()
+            atom1_name = atom1_info.GetName() if atom1_info is not None else None
+            atom2_name = atom2_info.GetName() if atom2_info is not None else None
+            logger.info(f"{pair} : {atom1_name} <-> {atom2_name}")
+
         return mapping
 
     @property
