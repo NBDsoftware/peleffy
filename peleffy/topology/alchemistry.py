@@ -1233,14 +1233,23 @@ class Alchemizer(object):
 
         for atom_idx, atom in enumerate(self._joint_topology.atoms):
             if atom_idx in self._exclusive_atoms:
-                lambda_value = 1.0 - lambda_set.get_lambda_for_coulomb1()
+                # Scale tracks physical presence (LJ/vdW), not electrostatics.
+                # With the three-stage lambda schedule, coul1_lambda reaches 1
+                # by end of Phase 1, driving scale to 0 while the atom still
+                # has its LJ core. Tying scale to vdw1_lambda ensures Born
+                # descreening is present exactly while the atom is physically
+                # present.
+                lambda_value = 1.0 - lambda_set.get_lambda_for_vdw1()
                 radius = radii1[(atom_idx, )]  # Do not change it
                 scale = scales1[(atom_idx, )] * lambda_value
 
             elif atom_idx in self._non_native_atoms:
                 for mol2_index, alc_index in self._mol2_to_alc_map.items():
                     if alc_index == atom_idx:
-                        lambda_value = lambda_set.get_lambda_for_coulomb2()
+                        # Symmetric to exclusive atoms: scale grows as the atom
+                        # is physically coupled (vdw_lambda), not as charges
+                        # are turned on (coul2_lambda).
+                        lambda_value = lambda_set.get_lambda_for_vdw2()
                         radius = radii2[(mol2_index, )]  # Do not change it
                         scale = scales2[(mol2_index, )] * lambda_value
                         break
@@ -1256,7 +1265,10 @@ class Alchemizer(object):
                 radius2 = mol2_obc_params._radii[0][(mol2_idx, )]
                 scale2 = mol2_obc_params._scales[0][(mol2_idx, )]
 
-                lambda_value = 1.0 - lambda_set.get_lambda_for_coulomb2()
+                # Interpolate radius and scale between mol1 and mol2 endpoints
+                # tracking the physical (vdW) transformation, not the
+                # electrostatic coupling of mol2 charges.
+                lambda_value = 1.0 - lambda_set.get_lambda_for_vdw()
                 radius = radii1[(atom_idx, )] * lambda_value \
                     + (1.0 - lambda_value) * radius2
                 scale = scales1[(atom_idx, )] * lambda_value \
