@@ -160,7 +160,7 @@ class Alchemizer(object):
         """
         return self._connections
 
-    def get_alchemical_topology(self, fep_lambda=None, coul_lambda=None,
+    def get_alchemical_topology(self, fep_lambda=None,
                                 coul1_lambda=None, coul2_lambda=None,
                                 vdw_lambda=None, vdw1_lambda=None,
                                 vdw2_lambda=None, bonded_lambda=None):
@@ -174,23 +174,18 @@ class Alchemizer(object):
             The value to define an FEP lambda. This lambda affects
             all the parameters. It needs to be contained between
             0 and 1. Default is None
-        coul_lambda : float
-            The value to define a general coulombic lambda. This lambda
-            only affects coulombic parameters of both molecules. It needs
-            to be contained between 0 and 1. It has precedence over
-            fep_lambda. Default is None
         coul1_lambda : float
             The value to define a coulombic lambda for exclusive atoms
             of molecule 1. This lambda only affects coulombic parameters
             of exclusive atoms of molecule 1. It needs to be contained
-            between 0 and 1. It has precedence over coul_lambda or
-            fep_lambda. Default is None
+            between 0 and 1. It has precedence over fep_lambda.
+            Default is None
         coul2_lambda : float
             The value to define a coulombic lambda for exclusive atoms
             of molecule 2. This lambda only affects coulombic parameters
             of exclusive atoms of molecule 2. It needs to be contained
-            between 0 and 1. It has precedence over coul_lambda or
-            fep_lambda. Default is None
+            between 0 and 1. It has precedence over fep_lambda.
+            Default is None
         vdw_lambda : float
             The value to define a vdw lambda. This lambda only
             affects van der Waals parameters. It needs to be contained
@@ -223,7 +218,6 @@ class Alchemizer(object):
         """
         # Define lambdas
         fep_lambda = FEPLambda(fep_lambda)
-        coul_lambda = CoulombicLambda(coul_lambda)
         coul1_lambda = Coulombic1Lambda(coul1_lambda)
         coul2_lambda = Coulombic2Lambda(coul2_lambda)
         vdw_lambda = VanDerWaalsLambda(vdw_lambda)
@@ -231,13 +225,96 @@ class Alchemizer(object):
         vdw2_lambda = VanDerWaals2Lambda(vdw2_lambda)
         bonded_lambda = BondedLambda(bonded_lambda)
 
-        lambda_set = LambdaSet(fep_lambda, coul_lambda, coul1_lambda,
+        lambda_set = LambdaSet(fep_lambda, coul1_lambda,
                                coul2_lambda, vdw_lambda, vdw1_lambda,
                                vdw2_lambda, bonded_lambda)
 
         alchemical_topology = self.topology_from_lambda_set(lambda_set)
 
         return alchemical_topology
+
+    def _mapped_charge_phase1_share(self, mol1_mapped_atoms,
+                                    mol2_mapped_atoms):
+        """
+        It computes the fraction of the mapped atoms' total charge
+        journey (mol1 -> mol2) that should complete during the coul1
+        phase, with the remainder completing during coul2, so that the
+        hybrid molecule's total charge stays approximately constant
+        across the whole lambda path instead of developing a transient
+        net charge.
+
+        Rationale: exclusive atoms fully discharge during coul1 and
+        non-native atoms fully charge up during coul2. Since both
+        endpoint molecules are neutral, the charge exclusive atoms lose
+        during coul1 must be picked up by the mapped atoms over that
+        same window range (and symmetrically, the charge non-native
+        atoms gain during coul2 must be released by the mapped atoms
+        over that range) for total charge to stay conserved at every
+        intermediate lambda, not just at the two endpoints.
+
+        Parameters
+        ----------
+        mol1_mapped_atoms : list[int]
+            The list of mapped atom indices in molecule 1
+        mol2_mapped_atoms : list[int]
+            The list of mapped atom indices in molecule 2
+
+        Returns
+        -------
+        phase1_share : float
+            A value in [0, 1]. Defaults to 0.5 if the mapped atoms'
+            total charge barely changes between endpoints (i.e. there
+            is nothing meaningful to time-share).
+        """
+        from simtk import unit
+        from peleffy.utils import Logger
+
+        logger = Logger()
+
+        def _q(atom):
+            return atom.charge.value_in_unit(unit.elementary_charge)
+
+        excl_charge = sum(_q(self._joint_topology.atoms[i])
+                          for i in self._exclusive_atoms)
+        nonnative_charge = sum(_q(self._joint_topology.atoms[i])
+                               for i in self._non_native_atoms)
+        mapped_mol1_total = sum(_q(self.topology1.atoms[i])
+                                for i in mol1_mapped_atoms)
+        mapped_mol2_total = sum(_q(self.topology2.atoms[i])
+                                for i in mol2_mapped_atoms)
+
+        delta_mapped = mapped_mol2_total - mapped_mol1_total
+
+        if abs(delta_mapped) < 1e-6:
+            return 0.5
+
+        # Two independent estimates (from the exclusive-atom side and
+        # the non-native-atom side) that should agree if both molecules
+        # are exactly neutral. Average them for robustness against
+        # small per-molecule net-charge residuals from charge fitting.
+        share_from_excl = excl_charge / delta_mapped
+        share_from_nonnative = 1.0 + nonnative_charge / delta_mapped
+        phase1_share = 0.5 * (share_from_excl + share_from_nonnative)
+
+        if not (-0.05 <= phase1_share <= 1.05):
+            logger.warning(
+                [f'Mapped-atom charge phase1_share ({phase1_share:.2f}) '
+                 'is far outside [0, 1] for this alchemical pair -- '
+                 'falling back to an even 0.5/0.5 split between coul1 '
+                 'and coul2 instead of clamping to a hard endpoint. '
+                 'This usually means the exclusive/non-native atom '
+                 'split does not carry the charge expected from a '
+                 'neutral substituent swap -- check the atom mapping '
+                 'for this pair.'])
+            # A wildly out-of-range estimate (e.g. driven by a tiny or
+            # near-zero delta_mapped) is not a meaningful share to act
+            # on. Clamping it to the nearest hard bound (0 or 1) would
+            # dump the entire mapped-atom charge shift into a single
+            # phase, which is a worse approximation than just splitting
+            # it evenly.
+            return 0.5
+
+        return min(max(phase1_share, 0.0), 1.0)
 
     def topology_from_lambda_set(self, lambda_set):
         """
@@ -309,6 +386,18 @@ class Alchemizer(object):
         mol2_mapped_atoms = [atom_pair[1] for atom_pair in self.mapping]
         mol1_to_mol2_map = dict(zip(mol1_mapped_atoms, mol2_mapped_atoms))
 
+        # Charge-conserving schedule for mapped atoms (see
+        # _mapped_charge_phase1_share docstring): mapped atoms are
+        # charge-fit independently per molecule and can carry very
+        # different partial charges between mol1 and mol2 for the "same"
+        # atom. Tying their charge interpolation to get_lambda_for_vdw()
+        # (the previous behaviour, via the fep_lambda fallback) desyncs
+        # it from the coul1/coul2 windows where exclusive/non-native
+        # atoms actually lose/gain charge, producing a large transient
+        # net charge on the hybrid molecule at intermediate lambda.
+        mapped_charge_phase1_share = self._mapped_charge_phase1_share(
+            mol1_mapped_atoms, mol2_mapped_atoms)
+
         for atom_idx, atom in enumerate(alchemical_topology.atoms):
             if atom_idx in self._exclusive_atoms:
                 # Scale LJ (sigma, epsilon) and nonpolar GB parameters to
@@ -358,8 +447,20 @@ class Alchemizer(object):
                                   lambda_set.get_lambda_for_vdw(),
                                   reverse=False,
                                   final_state=mol2_atom)
+
+                # Charge follows its own coul1/coul2-synchronized
+                # schedule instead of get_lambda_for_vdw()/coulomb's
+                # fep fallback, so it stays flat during the vdW-only
+                # window (just like exclusive/non-native atom charges
+                # do) and total molecular charge is conserved at every
+                # window instead of swinging away from neutral mid-path.
+                mapped_charge_lambda = (
+                    mapped_charge_phase1_share
+                    * lambda_set.get_lambda_for_coulomb1()
+                    + (1.0 - mapped_charge_phase1_share)
+                    * lambda_set.get_lambda_for_coulomb2())
                 atom.apply_lambda(["charge"],
-                                  lambda_set.get_lambda_for_coulomb(),
+                                  mapped_charge_lambda,
                                   reverse=False,
                                   final_state=mol2_atom)
 
@@ -980,7 +1081,7 @@ class Alchemizer(object):
         rdkit_wrapper.to_pdb_file(molecule, path)
 
     def rotamer_library_to_file(self, path, fep_lambda=None,
-                                coul_lambda=None, coul1_lambda=None,
+                                coul1_lambda=None,
                                 coul2_lambda=None, vdw_lambda=None,
                                 vdw1_lambda=None, vdw2_lambda=None,
                                 bonded_lambda=None):
@@ -997,23 +1098,18 @@ class Alchemizer(object):
             The value to define an FEP lambda. This lambda affects
             all the parameters. It needs to be contained between
             0 and 1. Default is None
-        coul_lambda : float
-            The value to define a general coulombic lambda. This lambda
-            only affects coulombic parameters of both molecules. It needs
-            to be contained between 0 and 1. It has precedence over
-            fep_lambda. Default is None
         coul1_lambda : float
             The value to define a coulombic lambda for exclusive atoms
             of molecule 1. This lambda only affects coulombic parameters
             of exclusive atoms of molecule 1. It needs to be contained
-            between 0 and 1. It has precedence over coul_lambda or
-            fep_lambda. Default is None
+            between 0 and 1. It has precedence over fep_lambda.
+            Default is None
         coul2_lambda : float
             The value to define a coulombic lambda for exclusive atoms
             of molecule 2. This lambda only affects coulombic parameters
             of exclusive atoms of molecule 2. It needs to be contained
-            between 0 and 1. It has precedence over coul_lambda or
-            fep_lambda. Default is None
+            between 0 and 1. It has precedence over fep_lambda.
+            Default is None
         vdw_lambda : float
             The value to define a vdw lambda. This lambda only
             affects van der Waals parameters. It needs to be contained
@@ -1041,13 +1137,12 @@ class Alchemizer(object):
         """
 
         at_least_one = fep_lambda is not None or \
-            coul_lambda is not None or coul1_lambda is not None or \
+            coul1_lambda is not None or \
             coul2_lambda is not None or vdw_lambda is not None or \
             bonded_lambda is not None
 
         # Define lambdas
         fep_lambda = FEPLambda(fep_lambda)
-        coul_lambda = CoulombicLambda(coul_lambda)
         coul1_lambda = Coulombic1Lambda(coul1_lambda)
         coul2_lambda = Coulombic2Lambda(coul2_lambda)
         vdw_lambda = VanDerWaalsLambda(vdw_lambda)
@@ -1055,7 +1150,7 @@ class Alchemizer(object):
         vdw2_lambda = VanDerWaals2Lambda(vdw2_lambda)
         bonded_lambda = BondedLambda(bonded_lambda)
 
-        lambda_set = LambdaSet(fep_lambda, coul_lambda, coul1_lambda,
+        lambda_set = LambdaSet(fep_lambda, coul1_lambda,
                                coul2_lambda, vdw_lambda, vdw1_lambda,
                                vdw2_lambda, bonded_lambda)
 
@@ -1064,7 +1159,6 @@ class Alchemizer(object):
             lambda_set.get_lambda_for_vdw() == 0.0 and
             lambda_set.get_lambda_for_vdw1() == 0.0 and
             lambda_set.get_lambda_for_vdw2() == 0.0 and
-            lambda_set.get_lambda_for_coulomb() == 0.0 and
             lambda_set.get_lambda_for_coulomb1() == 0.0 and
                 lambda_set.get_lambda_for_coulomb2() == 0.0):
             rotamers = self.molecule1.rotamers
@@ -1075,7 +1169,6 @@ class Alchemizer(object):
               lambda_set.get_lambda_for_vdw() == 1.0 and
               lambda_set.get_lambda_for_vdw1() == 1.0 and
               lambda_set.get_lambda_for_vdw2() == 1.0 and
-              lambda_set.get_lambda_for_coulomb() == 1.0 and
               lambda_set.get_lambda_for_coulomb1() == 1.0 and
                   lambda_set.get_lambda_for_coulomb2() == 1.0):
             rotamers = self.molecule2.rotamers
@@ -1117,7 +1210,7 @@ class Alchemizer(object):
                         rotamer.resolution, atom_name1, atom_name2))
 
     def obc_parameters_to_file(self, path, fep_lambda=None,
-                               coul_lambda=None, coul1_lambda=None,
+                               coul1_lambda=None,
                                coul2_lambda=None, vdw_lambda=None,
                                vdw1_lambda=None, vdw2_lambda=None,
                                bonded_lambda=None):
@@ -1145,23 +1238,18 @@ class Alchemizer(object):
             The value to define an FEP lambda. This lambda affects
             all the parameters. It needs to be contained between
             0 and 1. Default is None
-        coul_lambda : float
-            The value to define a general coulombic lambda. This lambda
-            only affects coulombic parameters of both molecules. It needs
-            to be contained between 0 and 1. It has precedence over
-            fep_lambda. Default is None
         coul1_lambda : float
             The value to define a coulombic lambda for exclusive atoms
             of molecule 1. This lambda only affects coulombic parameters
             of exclusive atoms of molecule 1. It needs to be contained
-            between 0 and 1. It has precedence over coul_lambda or
-            fep_lambda. Default is None
+            between 0 and 1. It has precedence over fep_lambda.
+            Default is None
         coul2_lambda : float
             The value to define a coulombic lambda for exclusive atoms
             of molecule 2. This lambda only affects coulombic parameters
             of exclusive atoms of molecule 2. It needs to be contained
-            between 0 and 1. It has precedence over coul_lambda or
-            fep_lambda. Default is None
+            between 0 and 1. It has precedence over fep_lambda.
+            Default is None
         vdw_lambda : float
             The value to define a vdw lambda. This lambda only
             affects van der Waals parameters. It needs to be contained
@@ -1202,7 +1290,6 @@ class Alchemizer(object):
 
         # Define lambdas
         fep_lambda = FEPLambda(fep_lambda)
-        coul_lambda = CoulombicLambda(coul_lambda)
         coul1_lambda = Coulombic1Lambda(coul1_lambda)
         coul2_lambda = Coulombic2Lambda(coul2_lambda)
         vdw_lambda = VanDerWaalsLambda(vdw_lambda)
@@ -1210,7 +1297,7 @@ class Alchemizer(object):
         vdw2_lambda = VanDerWaals2Lambda(vdw2_lambda)
         bonded_lambda = BondedLambda(bonded_lambda)
 
-        lambda_set = LambdaSet(fep_lambda, coul_lambda, coul1_lambda,
+        lambda_set = LambdaSet(fep_lambda, coul1_lambda,
                                coul2_lambda, vdw_lambda, vdw1_lambda,
                                vdw2_lambda, bonded_lambda)
 
@@ -1387,17 +1474,9 @@ class FEPLambda(Lambda):
     """
     _TYPE = "fep"
 
-class CoulombicLambda(Lambda):
-    """
-    It defines the CoulombicLambda class. It affects only coulombic
-    parameters involving both molecules.
-    """
-    _TYPE = "coulombic"
-
-
 class Coulombic1Lambda(Lambda):
     """
-    It defines the CoulombicLambda1 class. It affects only coulombic
+    It defines the Coulombic1Lambda class. It affects only coulombic
     parameters involving exclusive atoms of molecule 1.
     """
     _TYPE = "coulombic1"
@@ -1405,7 +1484,7 @@ class Coulombic1Lambda(Lambda):
 
 class Coulombic2Lambda(Lambda):
     """
-    It defines the CoulombicLambda2 class. It affects only coulombic
+    It defines the Coulombic2Lambda class. It affects only coulombic
     parameters involving exclusive atoms of molecule 2.
     """
     _TYPE = "coulombic2"
@@ -1445,7 +1524,7 @@ class LambdaSet(object):
     It defines the LambdaSet class.
     """
 
-    def __init__(self, fep_lambda, coul_lambda, coul1_lambda, coul2_lambda,
+    def __init__(self, fep_lambda, coul1_lambda, coul2_lambda,
                  vdw_lambda, vdw1_lambda, vdw2_lambda, bonded_lambda):
         """
         It initializes a LambdaSet object which stores all the different
@@ -1455,8 +1534,6 @@ class LambdaSet(object):
         ----------
         fep_lambda : a peleffy.topology.alchemy.FEPLambda object
             The fep lambda
-        coul_lambda : a peleffy.topology.alchemy.CoulombicLambda object
-            The coulombic lambda for both molecules
         coul1_lambda : a peleffy.topology.alchemy.Coulombic1Lambda object
             The coulombic lambda for exclusive atoms of molecule 1
         coul2_lambda : a peleffy.topology.alchemy.Coulombic2Lambda object
@@ -1476,9 +1553,6 @@ class LambdaSet(object):
         if not isinstance(fep_lambda,
                           peleffy.topology.alchemistry.FEPLambda):
             raise TypeError('Invalid fep_lambda supplied to LambdaSet')
-        if not isinstance(coul_lambda,
-                          peleffy.topology.alchemistry.CoulombicLambda):
-            raise TypeError('Invalid coul_lambda supplied to LambdaSet')
         if not isinstance(coul1_lambda,
                           peleffy.topology.alchemistry.Coulombic1Lambda):
             raise TypeError('Invalid coul1_lambda supplied to LambdaSet')
@@ -1499,7 +1573,6 @@ class LambdaSet(object):
             raise TypeError('Invalid bonded_lambda supplied to LambdaSet')
 
         self._fep_lambda = fep_lambda
-        self._coul_lambda = coul_lambda
         self._coul1_lambda = coul1_lambda
         self._coul2_lambda = coul2_lambda
         self._vdw_lambda = vdw_lambda
@@ -1518,18 +1591,6 @@ class LambdaSet(object):
             The value of the fep_lambda
         """
         return self._fep_lambda
-
-    @property
-    def coul_lambda(self):
-        """
-        It returns the coul_lambda value.
-
-        Returns
-        -------
-        coul_lambda : float
-            The value of the coul_lambda
-        """
-        return self._coul_lambda
 
     @property
     def coul1_lambda(self):
@@ -1675,28 +1736,6 @@ class LambdaSet(object):
 
         return lambda_value
 
-    def get_lambda_for_coulomb(self):
-        """
-        It returns the lambda to be applied on Coulomb parameters of
-        both molecules.
-
-        Returns
-        -------
-        lambda_value : float
-            The lambda value to be applied on Coulomb parameters of
-            both molecules
-        """
-        if self.coul_lambda.is_set:
-            lambda_value = self.coul_lambda.value
-
-        elif self.fep_lambda.is_set:
-            lambda_value = self.fep_lambda.value
-
-        else:
-            lambda_value = 0.0
-
-        return lambda_value
-
     def get_lambda_for_coulomb1(self):
         """
         It returns the lambda to be applied on Coulomb parameters of
@@ -1710,9 +1749,6 @@ class LambdaSet(object):
         """
         if self.coul1_lambda.is_set:
             lambda_value = self.coul1_lambda.value
-
-        elif self.coul_lambda.is_set:
-            lambda_value = self.coul_lambda.value
 
         elif self.fep_lambda.is_set:
             lambda_value = self.fep_lambda.value
@@ -1735,9 +1771,6 @@ class LambdaSet(object):
         """
         if self.coul2_lambda.is_set:
             lambda_value = self.coul2_lambda.value
-
-        elif self.coul_lambda.is_set:
-            lambda_value = self.coul_lambda.value
 
         elif self.fep_lambda.is_set:
             lambda_value = self.fep_lambda.value
