@@ -1153,6 +1153,82 @@ class RDKitToolkitWrapper(ToolkitWrapper):
         return mol_combo
 
 
+class KartografToolkitWrapper(ToolkitWrapper):
+    """
+    KartografToolkitWrapper class.
+    """
+
+    _toolkit_name = 'Kartograf Toolkit'
+
+    def __init__(self):
+        """
+        It initializes a KartografToolkitWrapper object.
+        """
+        super().__init__()
+
+        if not self.is_available():
+            raise ToolkitUnavailableException(
+                'The required toolkit {} is not '.format(self.toolkit_name)
+                + 'available.')
+
+    @staticmethod
+    def is_available():
+        """
+        Check whether the Kartograf toolkit can be imported
+
+        Returns
+        -------
+        is_installed : bool
+            True if Kartograf is installed, False otherwise.
+        """
+        try:
+            importlib.import_module('kartograf')
+            return True
+        except ImportError:
+            return False
+
+    def get_atom_mapping(self, molecule1, molecule2, include_hydrogens,
+                         atom_max_distance=0.95):
+        """
+        Given two molecules, it returns the atom mapping between them,
+        computed with Kartograf's geometry-based atom mapper. Unlike
+        the MCS-based mapping, this algorithm relies exclusively on the
+        3D coordinates of both molecules, so it expects them to be
+        already overlaid in the same reference frame (e.g. two docking
+        poses sharing the same binding site).
+
+        Parameters
+        ----------
+        molecule1 : a peleffy.topology.Molecule
+            The first molecule to map
+        molecule2 : a peleffy.topology.Molecule
+            The second molecule to map
+        include_hydrogens : bool
+            Whether to include hydrogen atoms in the mapping or not
+        atom_max_distance : float
+            The maximum distance, in Angstrom, allowed between two
+            atoms for them to be considered a match. Default is 0.95
+
+        Returns
+        -------
+        mapping : list[tuple]
+            The list of atom pairs between both molecules, represented
+            with tuples
+        """
+        from kartograf import KartografAtomMapper
+
+        kartograf_mapper = KartografAtomMapper(
+            atom_max_distance=atom_max_distance,
+            atom_map_hydrogens=include_hydrogens)
+
+        mapping_dict = kartograf_mapper.suggest_mapping_from_rdmols(
+            molecule1.rdkit_molecule, molecule2.rdkit_molecule)
+
+        mapping = sorted(mapping_dict.items())
+
+        return mapping
+
+
 class AmberToolkitWrapper(ToolkitWrapper):
     """
     AmberToolkitWrapper class.

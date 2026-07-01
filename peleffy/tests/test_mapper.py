@@ -22,9 +22,14 @@ class TestMapper(object):
 
         # Check initializer with only the two molecules
         mapper = Mapper(mol1, mol2)
+        assert mapper.mapping_method == 'mcs'
 
         # Check initializer with only include_hydrogens parameter
         mapper = Mapper(mol1, mol2, include_hydrogens=False)
+
+        # Check initializer with the kartograf mapping method
+        mapper = Mapper(mol1, mol2, mapping_method='kartograf')
+        assert mapper.mapping_method == 'kartograf'
 
         # Check initializer with bad types
         with pytest.raises(TypeError):
@@ -32,6 +37,10 @@ class TestMapper(object):
 
         with pytest.raises(TypeError):
             mapper = Mapper(mol1, "mol2")
+
+        # Check initializer with an unsupported mapping method
+        with pytest.raises(ValueError):
+            mapper = Mapper(mol1, mol2, mapping_method='unknown')
 
     def test_mapper_mapping(self):
         """
@@ -116,4 +125,26 @@ class TestMapper(object):
                 mapping == [(6, 1), (7, 2), (15, 9), (16, 10), (17, 11), (5, 0), (4, 6), (3, 5),
                             (2, 4), (0, 3), (1, 12), (11, 13), (12, 14), (13, 7), (14, 8)] or
                 len(mapping) == 15), 'Unexpected mapping'
+
+    def test_mapper_kartograf_mapping(self):
+        """
+        It validates the mapping obtained with the Kartograf toolkit.
+        Kartograf's algorithm is purely geometric, so it requires both
+        molecules to already be overlaid in the same reference frame
+        (as it happens with two docking poses from the same binding
+        site).
+        """
+        from peleffy.topology import Molecule
+        from peleffy.topology import Mapper
+        from peleffy.utils import get_data_file_path
+
+        mol1 = Molecule(get_data_file_path('ligands/acetylene.pdb'))
+        mol2 = Molecule(get_data_file_path('ligands/ethylene.pdb'))
+
+        mapper = Mapper(mol1, mol2, include_hydrogens=False,
+                        mapping_method='kartograf')
+        mapping = mapper.get_mapping()
+
+        # Both carbon atoms are expected to be mapped to each other
+        assert set(mapping) == {(0, 0), (1, 1)}, 'Unexpected mapping'
 
