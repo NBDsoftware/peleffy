@@ -245,8 +245,13 @@ class Atom(_TopologyElement):
 
     _name = 'Atom'
     _writable_attrs = ['index', 'PDB_name', 'OPLS_type']
+    # Note: 'nonpolar_gamma' is intentionally excluded from this list.
+    # In the alchemical pipeline (see Alchemizer.topology_from_lambda_set)
+    # it is repurposed to carry a discrete atom-state flag (0/1/2) rather
+    # than an interpolated physical parameter, and is always set directly
+    # via set_nonpolar_gamma() instead of through apply_lambda().
     _lambda_changeable = ['sigma', 'epsilon', 'charge', 'born_radius',
-                          'SASA_radius', 'nonpolar_gamma', 'nonpolar_alpha']
+                          'SASA_radius', 'nonpolar_alpha']
 
     def __init__(self, index=-1, core=None, OPLS_type=None, PDB_name=None,
                  unknown=None, x=None, y=None, z=None, sigma=None,
@@ -284,9 +289,15 @@ class Atom(_TopologyElement):
         SASA_radius : simtk.unit.Quantity
             The SASA radius parameter of the atom
         nonpolar_gamma : simtk.unit.Quantity
-            The nonpolar gamma parameter of the atom
+            The nonpolar gamma parameter of the atom. In alchemical
+            (hybrid) topologies this is repurposed to hold a discrete
+            atom-state flag instead (see
+            peleffy.topology.alchemistry.Alchemizer.topology_from_lambda_set)
         nonpolar_alpha : simtk.unit.Quantity
-            The nonpolar alpha parameter of the atom
+            The nonpolar alpha parameter of the atom. In alchemical
+            (hybrid) topologies this is repurposed to hold the soft-core
+            scale factor instead (see
+            peleffy.topology.alchemistry.Alchemizer.topology_from_lambda_set)
         parent : peleffy.topology.Atom
             The parent of the atom
         """

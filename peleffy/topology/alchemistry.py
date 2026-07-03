@@ -329,6 +329,26 @@ class Alchemizer(object):
         ``apply_lambda`` multiplication for exclusive/non-native atoms — it is
         set directly so the physical GB ``nonpolar_alpha`` (if any) is replaced
         by ``s``.
+
+        Atom-state flag (NBON col 7 / ``adjustableParameterGamma``):
+
+        ``nonpolar_gamma`` is repurposed to carry a discrete, lambda-independent
+        label for each atom's role in the alchemical transformation:
+
+        * ``0`` — mapped atom, present (in some form) in both states
+        * ``1`` — exclusive to state 1 (mol1-only, annihilated over the path)
+        * ``2`` — exclusive to state 2 (mol2-only, created over the path)
+
+        This is safe because ``nonpolar_gamma`` (the SGB nonpolar surface
+        tension coefficient) is never computed for OpenFF-parameterized atoms
+        (always ``None`` at the peleffy layer) and, on PELE's side, its only
+        reader is ``SgbNonPolarEnergyCalculator``, which is instantiated
+        exclusively for the OPLS2005+SGB solvent path — never for the
+        OpenFF+OBC path this pipeline uses (``ACENonPolarEnergyCalculator``
+        reads only ``gbr``/``alpha`` plus global solvent-file constants). Like
+        ``nonpolar_alpha`` above, it is set directly rather than through
+        ``apply_lambda`` and is excluded from the lambda-scaled attribute
+        lists for all three atom categories below.
         """
         from copy import deepcopy
 
@@ -352,7 +372,9 @@ class Alchemizer(object):
                 # which is set to 0 when the atom is fully decoupled.
                 # nonpolar_alpha is NOT included here — it is set directly
                 # below as the soft-core parameter s (see Notes in docstring).
-                atom.apply_lambda(["sigma", "epsilon", "nonpolar_gamma"],
+                # nonpolar_gamma is likewise excluded — it now carries the
+                # atom-state flag and is set directly below, not scaled.
+                atom.apply_lambda(["sigma", "epsilon"],
                                   lambda_set.get_lambda_for_vdw1(),
                                   reverse=False)
                 atom.apply_lambda(["charge"],
@@ -361,6 +383,8 @@ class Alchemizer(object):
                 # Soft-core s = vdw1_lambda: 0 when atom is fully present,
                 # 1 when it has vanished (sigma → 0). Prevents LJ singularity.
                 atom.set_nonpolar_alpha(lambda_set.get_lambda_for_vdw1())
+                # Atom-state flag: 1 = exclusive to state 1 (annihilated).
+                atom.set_nonpolar_gamma(1.0)
 
             if atom_idx in self._non_native_atoms:
                 # Same rationale as for exclusive atoms above: do not scale
@@ -368,7 +392,8 @@ class Alchemizer(object):
                 # intermediate lambda. GB coupling is handled via the solvent
                 # template scale factor.
                 # nonpolar_alpha is NOT included here — set directly below.
-                atom.apply_lambda(["sigma", "epsilon", "nonpolar_gamma"],
+                # nonpolar_gamma is likewise excluded — set directly below.
+                atom.apply_lambda(["sigma", "epsilon"],
                                   lambda_set.get_lambda_for_vdw2(),
                                   reverse=True)
                 atom.apply_lambda(["charge"],
@@ -378,13 +403,16 @@ class Alchemizer(object):
                 # present (sigma = 0), 0 when it is fully coupled.
                 atom.set_nonpolar_alpha(
                     1.0 - lambda_set.get_lambda_for_vdw2())
+                # Atom-state flag: 2 = exclusive to state 2 (created).
+                atom.set_nonpolar_gamma(2.0)
 
             if atom_idx in mol1_mapped_atoms:
                 mol2_idx = mol1_to_mol2_map[atom_idx]
                 mol2_atom = self.topology2.atoms[mol2_idx]
+                # nonpolar_gamma is excluded from this interpolation — mapped
+                # atoms always carry the state flag 0, set directly below.
                 atom.apply_lambda(["sigma", "epsilon", "born_radius",
-                                   "SASA_radius", "nonpolar_gamma",
-                                   "nonpolar_alpha"],
+                                   "SASA_radius", "nonpolar_alpha"],
                                   lambda_set.get_lambda_for_vdw(),
                                   reverse=False,
                                   final_state=mol2_atom)
@@ -392,6 +420,8 @@ class Alchemizer(object):
                                   lambda_set.get_lambda_for_coulomb(),
                                   reverse=False,
                                   final_state=mol2_atom)
+                # Atom-state flag: 0 = mapped/common to both states.
+                atom.set_nonpolar_gamma(0.0)
 
         for bond_idx, bond in enumerate(alchemical_topology.bonds):
             if bond_idx in self._exclusive_bonds:
