@@ -10,10 +10,12 @@ class Mapper(object):
     """
 
     _TIMEOUT = 150  # Timeout to find the MCS, in seconds
+    _KARTOGRAF_ATOM_MAX_DISTANCE = 0.95  # In Angstrom
     _SUPPORTED_MAPPING_METHODS = ('mcs', 'kartograf')
 
     def __init__(self, molecule1, molecule2, include_hydrogens=True,
-                mapping_method='mcs'):
+                mapping_method='mcs',
+                atom_max_distance=_KARTOGRAF_ATOM_MAX_DISTANCE):
         """
         Given two molecules, it maps their atoms.
 
@@ -32,6 +34,10 @@ class Mapper(object):
             (Kartograf's geometry-based mapper, which requires both
             molecules to be overlaid in the same reference frame).
             Default is 'mcs'
+        atom_max_distance : float
+            Only used when mapping_method is 'kartograf'. The maximum
+            distance, in Angstrom, allowed between two atoms for them
+            to be considered a match. Default is 0.95
         """
 
         # Check parameters
@@ -62,6 +68,7 @@ class Mapper(object):
         self._molecule2 = molecule2
         self._include_hydrogens = include_hydrogens
         self._mapping_method = mapping_method
+        self._atom_max_distance = atom_max_distance
 
     def get_mcs(self):
         """
@@ -100,7 +107,8 @@ class Mapper(object):
             kartograf_toolkit = KartografToolkitWrapper()
 
             mapping = kartograf_toolkit.get_atom_mapping(
-                self.molecule1, self.molecule2, self._include_hydrogens)
+                self.molecule1, self.molecule2, self._include_hydrogens,
+                atom_max_distance=self._atom_max_distance)
         else:
             from peleffy.utils.toolkits import RDKitToolkitWrapper
 
@@ -112,8 +120,6 @@ class Mapper(object):
                                                      self.molecule2,
                                                      mcs_mol,
                                                      self._include_hydrogens)
-
-        self._log_mapping(mapping)
 
         return mapping
 
@@ -176,6 +182,20 @@ class Mapper(object):
         """
         return self._mapping_method
 
+    @property
+    def atom_max_distance(self):
+        """
+        It returns the maximum distance allowed between two atoms for
+        them to be considered a match. Only used when mapping_method
+        is 'kartograf'.
+
+        Returns
+        -------
+        atom_max_distance : float
+            The maximum distance, in Angstrom
+        """
+        return self._atom_max_distance
+
     def to_png(self, output_png):
         """
         It generates a PNG image representing the resulting alchemical
@@ -197,12 +217,8 @@ class Mapper(object):
 
         rdkit_toolkit = RDKitToolkitWrapper()
 
-        mcs_mol = rdkit_toolkit.get_mcs(self.molecule1, self.molecule2,
-                                        self._include_hydrogens,
-                                        self._TIMEOUT)
-
         image = rdkit_toolkit.draw_mapping(self.molecule1, self.molecule2,
-                                           mcs_mol, self._include_hydrogens)
+                                           self.get_mapping())
 
         image.save(output_png)
 
@@ -220,11 +236,7 @@ class Mapper(object):
 
         rdkit_toolkit = RDKitToolkitWrapper()
 
-        mcs_mol = rdkit_toolkit.get_mcs(self.molecule1, self.molecule2,
-                                        self._include_hydrogens,
-                                        self._TIMEOUT)
-
         image = rdkit_toolkit.draw_mapping(self.molecule1, self.molecule2,
-                                           mcs_mol, self._include_hydrogens)
+                                           self.get_mapping())
 
         return display(image)

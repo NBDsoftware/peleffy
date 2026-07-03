@@ -978,8 +978,7 @@ class RDKitToolkitWrapper(ToolkitWrapper):
         
         return mapping
 
-    def draw_mapping(self, molecule1, molecule2, mcs_mol,
-                     include_hydrogens):
+    def draw_mapping(self, molecule1, molecule2, mapping):
         """
         Given an atom mapping, it returns its representation.
 
@@ -989,28 +988,20 @@ class RDKitToolkitWrapper(ToolkitWrapper):
             The first molecule to map
         molecule2 : a peleffy.topology.Molecule
             The second molecule to map
-        mcs_mol : an RDKit.molecule object
-            The MCS molecule
-        include_hydrogens : bool
-            Whether to include hydrogen atoms in the mapping or not
+        mapping : list[tuple]
+            The list of atom pairs between both molecules, represented
+            with tuples
 
         Returns
         -------
         image : an IPython's display object
             The image of the atom mapping to display
         """
-        from rdkit import Chem
         from rdkit.Chem import AllChem
-        from rdkit.Chem.Draw import rdMolDraw2D
         from rdkit.Chem import Draw
-        from rdkit.Chem import rdFMCS
 
         rdkit_mol1 = deepcopy(molecule1.rdkit_molecule)
         rdkit_mol2 = deepcopy(molecule2.rdkit_molecule)
-
-        if not include_hydrogens:
-            rdkit_mol1 = AllChem.RemoveHs(rdkit_mol1)
-            rdkit_mol2 = AllChem.RemoveHs(rdkit_mol2)
 
         AllChem.Compute2DCoords(rdkit_mol1)
         AllChem.Compute2DCoords(rdkit_mol2)
@@ -1018,17 +1009,9 @@ class RDKitToolkitWrapper(ToolkitWrapper):
         mol1_name = '1: ' + molecule1.tag
         mol2_name = '2: ' + molecule2.tag
 
-        # Map atoms between mol1 and MCS mol
-        if rdkit_mol1.HasSubstructMatch(mcs_mol):
-            mol1_sub = rdkit_mol1.GetSubstructMatch(mcs_mol)
-        else:
-            raise ValueError('RDKit MCS Subgraph molecule 1 search failed')
-
-        # Map atoms between mol2 and MCS mol
-        if rdkit_mol2.HasSubstructMatch(mcs_mol):
-            mol2_sub = rdkit_mol2.GetSubstructMatch(mcs_mol)
-        else:
-            raise ValueError('RDKit MCS Subgraph molecule 2 search failed')
+        # Highlight the atoms that are part of the supplied mapping
+        mol1_sub = [pair[0] for pair in mapping]
+        mol2_sub = [pair[1] for pair in mapping]
 
         for atom in rdkit_mol1.GetAtoms():
             atom.SetProp('atomLabel', str(atom.GetIdx()))
@@ -1217,6 +1200,18 @@ class KartografToolkitWrapper(ToolkitWrapper):
         """
         from kartograf import KartografAtomMapper
 
+        if molecule1.rdkit_molecule.GetNumConformers() == 0:
+            raise ValueError(
+                'Molecule 1 has no 3D coordinates. The Kartograf mapper '
+                + 'requires both molecules to be overlaid in the same '
+                + '3D reference frame')
+
+        if molecule2.rdkit_molecule.GetNumConformers() == 0:
+            raise ValueError(
+                'Molecule 2 has no 3D coordinates. The Kartograf mapper '
+                + 'requires both molecules to be overlaid in the same '
+                + '3D reference frame')
+
         kartograf_mapper = KartografAtomMapper(
             atom_max_distance=atom_max_distance,
             atom_map_hydrogens=include_hydrogens)
@@ -1225,6 +1220,13 @@ class KartografToolkitWrapper(ToolkitWrapper):
             molecule1.rdkit_molecule, molecule2.rdkit_molecule)
 
         mapping = sorted(mapping_dict.items())
+
+        if len(mapping) == 0:
+            raise ValueError(
+                'No atom mapping was found between the molecules using '
+                + 'the Kartograf mapper. Please, make sure that both '
+                + 'molecules are overlaid in the same 3D reference frame '
+                + 'and consider loosening the atom_max_distance parameter')
 
         return mapping
 

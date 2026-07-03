@@ -279,9 +279,21 @@ class MolecularGraph(nx.Graph):
             self.nodes[i]['rotatable'] = True
             self.nodes[j]['rotatable'] = True
 
-    def _build_core_nodes(self):
+    def _build_core_nodes(self, candidate_nodes=None):
         """
         It builds the list of core nodes
+
+        Parameters
+        ----------
+        candidate_nodes : set[int] or None
+            If supplied, restricts the pool of nodes that can seed the
+            core (i.e. the graph's centered nodes) to this set. Used,
+            for instance, to force the core to be seeded within the
+            common substructure of two molecules when building an
+            alchemical hybrid, since exclusive and non-native atoms
+            are alchemically (dis)appearing and cannot serve as a
+            stable anchor for the topology tree. Default is None,
+            meaning that all nodes are valid candidates
         """
 
         def get_all_nrot_neighbors(self, atom_id, visited_neighbors):
@@ -321,6 +333,18 @@ class MolecularGraph(nx.Graph):
 
         # Calculate eccentricites using weighted distances
         eccentricities = eccentricity(self, sp=weighted_distances)
+
+        # Restrict the seed candidates, if requested
+        if candidate_nodes is not None:
+            eccentricities = {node: ecc for node, ecc
+                              in eccentricities.items()
+                              if node in candidate_nodes}
+
+            if len(eccentricities) == 0:
+                from peleffy.utils import Logger
+                logger = Logger()
+                logger.error('Error: none of the candidate nodes are '
+                             'available to seed the core')
 
         # Group nodes by eccentricity
         nodes_by_eccentricities = defaultdict(list)
@@ -1301,9 +1325,16 @@ class MolecularGraphWithConstrainedCore(MolecularGraph):
 
         self._safety_check()
 
-    def _build_core_nodes(self):
+    def _build_core_nodes(self, candidate_nodes=None):
         """
         It builds the list of core nodes
+
+        Parameters
+        ----------
+        candidate_nodes : set[int] or None
+            Unused, the core is already forced to contain the
+            constrained atoms. Kept for signature compatibility with
+            MolecularGraph._build_core_nodes(). Default is None
         """
 
         from networkx.algorithms.shortest_paths.generic import \

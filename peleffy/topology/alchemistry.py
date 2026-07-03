@@ -5,13 +5,19 @@ This module contains classes and methods related with alchemical modifications f
 
 from abc import ABC
 
+from .mapper import Mapper
+
 
 class Alchemizer(object):
     """
     It defines the Alchemizer class.
     """
 
-    def __init__(self, topology1, topology2):
+    _DEFAULT_MAPPING_METHOD = 'mcs'
+
+    def __init__(self, topology1, topology2,
+                mapping_method=_DEFAULT_MAPPING_METHOD,
+                atom_max_distance=Mapper._KARTOGRAF_ATOM_MAX_DISTANCE):
         """
         It initializes an Alchemizer object, which generates alchemical
         representations considering the topologies of two different
@@ -23,6 +29,16 @@ class Alchemizer(object):
             The molecular topology representation of molecule 1
         topology2 : a peleffy.topology.Topology object
             The molecular topology representation of molecule 2
+        mapping_method : str
+            The algorithm to use to compute the atom mapping between
+            both molecules. One of 'mcs' (RDKit's Maximum Common
+            Substructure) or 'kartograf' (Kartograf's geometry-based
+            mapper, which requires both molecules to be overlaid in
+            the same reference frame). Default is 'kartograf'
+        atom_max_distance : float
+            Only used when mapping_method is 'kartograf'. The maximum
+            distance, in Angstrom, allowed between two atoms for them
+            to be considered a match. Default is 0.95
         """
 
         # Check topologies
@@ -43,14 +59,28 @@ class Alchemizer(object):
         self._molecule1 = topology1.molecule
         self._molecule2 = topology2.molecule
 
-        from peleffy.topology import Mapper
+        from peleffy.utils import Logger
 
         # Map atoms from both molecules
+        logger = Logger()
+        logger.info(f"Using \"{mapping_method}\" mapper to match atoms "
+                    "between both molecules")
+
         self._mapper = Mapper(self.molecule1, self.molecule2,
-                              include_hydrogens=True)
+                              include_hydrogens=True,
+                              mapping_method=mapping_method,
+                              atom_max_distance=atom_max_distance)
 
         self._mapping = self._mapper.get_mapping()
-        self._mcs_mol = self._mapper.get_mcs()
+
+        self._mapper._log_mapping(self._mapping)
+
+        # The MCS is only meaningful (and guaranteed to exist) when the
+        # mapping itself was computed from it
+        if mapping_method == 'mcs':
+            self._mcs_mol = self._mapper.get_mcs()
+        else:
+            self._mcs_mol = None
 
         # Join the two topologies
         self._joint_topology, self._non_native_atoms, \
@@ -838,7 +868,17 @@ class Alchemizer(object):
                         alchemical_graph.add_edge(index1, index2,
                                                   weight=int(rotatable))
 
-        alchemical_graph._build_core_nodes()
+        # Seed the core only from atoms in the common substructure
+        # (mapped atoms), since exclusive (mol1-only) and non-native
+        # (mol2-only) atoms are alchemically (dis)appearing and cannot
+        # serve as a stable anchor for the hybrid topology tree. Any
+        # core constraints declared on molecule 1 or molecule 2 are
+        # ignored here, since they are not guaranteed to overlap with
+        # the mapped atoms of the hybrid molecule
+        from peleffy.topology.rotamer import MolecularGraph
+
+        MolecularGraph._build_core_nodes(
+            alchemical_graph, candidate_nodes=set(mol1_mapped_atoms))
 
         rotamers = alchemical_graph.get_rotamers()
 
@@ -849,14 +889,45 @@ class Alchemizer(object):
             else:
                 atom.set_as_branch()
 
-        # Find absolute parent atom
-        absolute_parent = None
-        for atom in self._joint_topology.atoms:
-            if atom.core:
-                absolute_parent = atom.index
-                break
+        # Find an absolute parent atom. It must be both core (a
+        # requirement of Impact's atom sorting, which assumes that
+        # any core atom's parent is also core) and part of the common
+        # substructure (mapped atoms). Since the core was seeded above
+        # exclusively from mapped atoms, this intersection is
+        # guaranteed to be non-empty. Among the valid candidates, we
+        # favor the one that is farthest (in bonds) from any exclusive
+        # or non-native atom, to keep the anchor as insulated as
+        # possible from the perturbed regions of both end states
+        candidate_parents = [atom.index for atom in self._joint_topology.atoms
+                             if atom.core and atom.index in mol1_mapped_atoms]
+
+        # The anchor atom should never be a hydrogen, since it offers a
+        # poor reference frame for internal coordinates. Favor heavy
+        # atoms among the candidates, if any are available
+        rdkit_mol1 = self.molecule1.rdkit_molecule
+        heavy_candidate_parents = [
+            idx for idx in candidate_parents
+            if rdkit_mol1.GetAtomWithIdx(idx).GetAtomicNum() != 1]
+
+        if len(heavy_candidate_parents) > 0:
+            candidate_parents = heavy_candidate_parents
+
+        perturbed_atoms = set(self._exclusive_atoms) | \
+            set(self._non_native_atoms)
+
+        if len(candidate_parents) == 0:
+            absolute_parent = None
+            logger.error(['Error: no core atom found in the common ' +
+                          'substructure of the hybrid molecule'])
+        elif len(perturbed_atoms) == 0:
+            absolute_parent = candidate_parents[0]
         else:
-            logger.error(['Error: no core atom found in hybrid molecule'])
+            import networkx as nx
+            distances = dict(nx.shortest_path_length(alchemical_graph))
+            absolute_parent = max(
+                candidate_parents,
+                key=lambda idx: min(distances[idx][other]
+                                    for other in perturbed_atoms))
 
         # Get parent indexes from the molecular graph
         parent_idxs = alchemical_graph.get_parents(absolute_parent)
