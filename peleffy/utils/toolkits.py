@@ -735,6 +735,27 @@ class RDKitToolkitWrapper(ToolkitWrapper):
         Given two molecules and a third molecule representing their
         maximum common substructure, it returns the atom mapping.
 
+        Beyond the heavy-atom MCS, atoms are extended into the mapping
+        based on 3D proximity to already-mapped atoms. Hydrogens are
+        only ever matched to other hydrogens in that extension: a
+        hydrogen is always a terminal atom, so mapping it onto a heavy
+        atom that carries its own subtree would anchor that whole
+        subtree on a borrowed (and typically much shorter) bond length,
+        distorting the resulting hybrid structure. Heavy-to-heavy
+        mappings across different elements (e.g. N to O) are still
+        allowed, matching the common single/hybrid-topology convention
+        of keeping R-group attachment points mapped across an element
+        change.
+
+        For the same reason, that extension never maps a ring atom
+        (from either molecule): a single ring atom can happen to
+        overlap an unrelated atom by coincidence, and mapping just
+        that one atom out would leave the rest of its ring to be
+        treated as a separate, disconnected fragment, silently
+        splitting the ring apart in the resulting hybrid topology.
+        Rings are only ever mapped as a whole, by the ring-aware
+        heavy-atom MCS above.
+
         Inspired by LOMAP repository, written by Gaetano Calabro and
         David Mobley (https://github.com/MobleyLab/Lomap)
 
@@ -848,6 +869,23 @@ class RDKitToolkitWrapper(ToolkitWrapper):
                 if not include_hydrogens and atom2.GetSymbol() == 'H':
                     continue  # skip hydrogens if not included
 
+                # Hydrogens must only be mapped to other hydrogens: a
+                # hydrogen is always a terminal atom, so it can never
+                # correctly anchor a heavy atom's subtree, regardless of
+                # how close they happen to be in 3D space
+                if (atom1.GetSymbol() == 'H') != (atom2.GetSymbol() == 'H'):
+                    continue
+
+                # Ring atoms are only mapped by the (ring-aware) heavy-atom
+                # MCS above, never by this proximity-based extension: a
+                # single ring atom can happen to overlap an unrelated atom
+                # by coincidence, and mapping just that one atom out would
+                # split the rest of its ring off as if it were a separate,
+                # disconnected fragment, silently corrupting the topology
+                if atom1.GetIsAromatic() or atom1.IsInRing() \
+                        or atom2.GetIsAromatic() or atom2.IsInRing():
+                    continue
+
                 # Both atoms must be connected to atoms already in the mapping
                 bonded_to_mapped1 = False
                 for bond in atom1.GetBonds():
@@ -953,6 +991,10 @@ class RDKitToolkitWrapper(ToolkitWrapper):
                     # Check if bonded to the same parent
                     bonds2 = atom2.GetBonds()
                     if len(bonds2) != 1:
+                        continue
+
+                    # Hydrogens must only be mapped to other hydrogens
+                    if (atom1.GetSymbol() == 'H') != (atom2.GetSymbol() == 'H'):
                         continue
 
                     parent2 = bonds2[0].GetOtherAtom(atom2)

@@ -99,6 +99,12 @@ class Alchemizer(object):
         # Generate alchemical graph
         self._graph, self._rotamers = self._generate_alchemical_graph()
 
+        # Rebuild the coordinates of atoms exclusive to molecule 2 so
+        # that their internal coordinates (with respect to their
+        # parent chain) match molecule 2's own geometry, instead of
+        # the raw molecule 2 coordinates _join_topologies kept
+        self._fix_non_native_coordinates()
+
         # Assign PDB atom names
         self._assign_pdb_atom_names()
 
@@ -977,6 +983,169 @@ class Alchemizer(object):
 
         return alchemical_graph, rotamers
 
+    def _fix_non_native_coordinates(self):
+        """
+        It rebuilds the Cartesian coordinates of the atoms that are
+        exclusive to molecule 2 (the non-native atoms).
+
+        _join_topologies grafts these atoms onto the joint topology
+        keeping their original (molecule 2 frame) x, y, z coordinates,
+        while the mapped atoms they are bonded to keep molecule 1's
+        coordinates. Since molecule 1 and molecule 2 are, in general,
+        two different conformations, mixing both frames at that
+        junction distorts the bond length, angle and dihedral of the
+        non-native atom with respect to its anchor, which can inject
+        a large, spurious strain energy right at the start of the
+        alchemical simulation.
+
+        This method walks the non-native atoms in parent-first order,
+        using the parent tree that _generate_alchemical_graph already
+        assigned to the whole joint topology. For each non-native
+        atom, it recomputes its bond length, angle and dihedral with
+        respect to its parent chain using molecule 2's own
+        (self-consistent) coordinates, then places it at those exact
+        internal coordinates but anchored to the parent chain's
+        actual (already fixed) position in the joint topology. This
+        keeps molecule 2's own geometry around every non-native atom
+        intact, and confines any residual approximation to the
+        (comparatively small) difference between molecule 1's and
+        molecule 2's own position for the mapped anchor, which is of
+        the same nature as the one already tolerated when
+        interpolating eq_dist/eq_angle for mapped bonds/angles.
+
+        When a non-native atom sits within 1 or 2 bonds of a mapped
+        atom that lacks enough molecule 2-side ancestors (e.g. a
+        very small mapped/core region), the angle and/or dihedral
+        cannot be taken from molecule 2 and a best-effort fallback is
+        used instead, while the bond length is always preserved.
+        """
+        from peleffy.topology.geometry import (calculate_bond_length,
+                                               calculate_bond_angle,
+                                               calculate_dihedral_angle,
+                                               place_atom,
+                                               arbitrary_perpendicular)
+        from peleffy.utils import Logger
+
+        logger = Logger()
+
+        alc_to_mol2 = {alc_idx: mol2_idx
+                       for mol2_idx, alc_idx in self._mol2_to_alc_map.items()}
+
+        def mol2_xyz(mol2_idx):
+            atom = self.topology2.atoms[mol2_idx]
+            return (atom.x, atom.y, atom.z)
+
+        def xyz(atom):
+            return (atom.x, atom.y, atom.z)
+
+        pending = list(self._non_native_atoms)
+        fixed = set(range(len(self._joint_topology.atoms))) - set(pending)
+        n_degraded = 0
+
+        while pending:
+            progressed = False
+            for atom_idx in list(pending):
+                atom = self._joint_topology.atoms[atom_idx]
+
+                if atom.parent is None or atom.parent.index not in fixed:
+                    continue
+
+                # Walk the (already finalized) parent chain, keeping
+                # only the ancestors that also exist in molecule 2,
+                # so we can read off molecule 2's own internal
+                # coordinates for this atom
+                ancestors = []
+                cursor = atom.parent
+                while cursor is not None and len(ancestors) < 3:
+                    mol2_idx = alc_to_mol2.get(cursor.index)
+                    if mol2_idx is None:
+                        break
+                    ancestors.append((cursor, mol2_idx))
+                    cursor = cursor.parent
+
+                if not ancestors:
+                    # A non-native atom is always bonded to a mapped
+                    # or to another non-native atom, so this is not
+                    # expected to happen
+                    logger.error(['Error: non-native atom ' +
+                                  f'{atom_idx} has no usable parent ' +
+                                  'to reconstruct its coordinates'])
+                    fixed.add(atom_idx)
+                    pending.remove(atom_idx)
+                    progressed = True
+                    continue
+
+                self_mol2_xyz = mol2_xyz(alc_to_mol2[atom_idx])
+                parent_atom, parent_mol2_idx = ancestors[0]
+                parent_xyz = xyz(parent_atom)
+                parent_mol2_xyz = mol2_xyz(parent_mol2_idx)
+
+                if len(ancestors) == 1:
+                    # No usable grandparent: only the bond length can
+                    # be taken from molecule 2. Translate molecule
+                    # 2's own displacement vector so it starts from
+                    # the parent's actual position instead
+                    new_xyz = tuple(
+                        parent_xyz[i] + (self_mol2_xyz[i] - parent_mol2_xyz[i])
+                        for i in range(3))
+                    atom.set_coords(new_xyz)
+                    n_degraded += 1
+                    fixed.add(atom_idx)
+                    pending.remove(atom_idx)
+                    progressed = True
+                    continue
+
+                bond = calculate_bond_length(self_mol2_xyz, parent_mol2_xyz)
+
+                grandparent_atom, grandparent_mol2_idx = ancestors[1]
+                grandparent_xyz = xyz(grandparent_atom)
+                grandparent_mol2_xyz = mol2_xyz(grandparent_mol2_idx)
+
+                angle = calculate_bond_angle(self_mol2_xyz, parent_mol2_xyz,
+                                             grandparent_mol2_xyz)
+
+                if len(ancestors) == 2:
+                    # No usable great-grandparent: bond and angle are
+                    # preserved exactly; the dihedral is not
+                    # constrained by molecule 2's data, so an
+                    # arbitrary (but deterministic) reference point
+                    # is used instead
+                    perp = arbitrary_perpendicular(
+                        tuple(grandparent_xyz[i] - parent_xyz[i]
+                              for i in range(3)))
+                    ggparent_xyz = tuple(grandparent_xyz[i] + perp[i]
+                                         for i in range(3))
+                    dihedral = 0.0
+                    n_degraded += 1
+                else:
+                    ggparent_atom, ggparent_mol2_idx = ancestors[2]
+                    ggparent_xyz = xyz(ggparent_atom)
+                    ggparent_mol2_xyz = mol2_xyz(ggparent_mol2_idx)
+                    dihedral = calculate_dihedral_angle(
+                        self_mol2_xyz, parent_mol2_xyz,
+                        grandparent_mol2_xyz, ggparent_mol2_xyz)
+
+                new_xyz = place_atom(parent_xyz, grandparent_xyz,
+                                     ggparent_xyz, bond, angle, dihedral)
+                atom.set_coords(new_xyz)
+
+                fixed.add(atom_idx)
+                pending.remove(atom_idx)
+                progressed = True
+
+            if not progressed:
+                logger.error(['Error: could not resolve the parent ' +
+                              'chain of some non-native atoms while ' +
+                              'fixing their coordinates'])
+                break
+
+        if n_degraded > 0:
+            logger.warning([f'Warning: {n_degraded} non-native atom(s) ' +
+                            'were placed without a full molecule ' +
+                            '2-native angle/dihedral reference, since ' +
+                            'they sit within 1-2 bonds of a very small ' +
+                            'mapped region'])
+
     def _assign_pdb_atom_names(self):
         """
         It assigns consistent PDB atom names to the alchemical molecule.
@@ -1029,6 +1198,18 @@ class Alchemizer(object):
                                                  self.mapping,
                                                  self.connections)
 
+        # alchemical_combination only performs a global rigid-body
+        # alignment of molecule 2 onto molecule 1 (for a readable
+        # side-by-side comparison), which does not carry the per-atom
+        # internal-coordinate correction that
+        # _fix_non_native_coordinates applied to the joint topology.
+        # Overwrite its conformer with the joint topology's (already
+        # fixed) coordinates so the PDB reflects the actual hybrid
+        # structure. Atom order and count are guaranteed to match
+        # self._joint_topology (molecule 1's atoms followed by
+        # molecule 2's non-mapped atoms, in the same relative order)
+        self._set_conformer_from_joint_topology(mol_combo)
+
         # Generate a dummy peleffy Molecule with the required information
         # to write it as a PDB file
         molecule = Molecule()
@@ -1036,6 +1217,26 @@ class Alchemizer(object):
         molecule.set_tag('HYB')
 
         rdkit_wrapper.to_pdb_file(molecule, path)
+
+    def _set_conformer_from_joint_topology(self, rdkit_molecule):
+        """
+        It overwrites the conformer of the supplied RDKit molecule,
+        in place, with the coordinates of self._joint_topology.
+
+        Parameters
+        ----------
+        rdkit_molecule : an RDKit.molecule object
+            The RDKit molecule whose conformer will be overwritten.
+            It must share the same atom order and count as
+            self._joint_topology (molecule 1's atoms followed by
+            molecule 2's non-mapped atoms, in the same relative order)
+        """
+        from rdkit.Geometry import Point3D
+
+        conformer = rdkit_molecule.GetConformer()
+        for atom in self._joint_topology.atoms:
+            conformer.SetAtomPosition(atom.index,
+                                      Point3D(atom.x, atom.y, atom.z))
 
     def molecule1_to_pdb(self, path):
         """
