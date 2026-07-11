@@ -355,8 +355,42 @@ class Alchemizer(object):
         ``nonpolar_alpha`` above, it is set directly rather than through
         ``apply_lambda`` and is excluded from the lambda-scaled attribute
         lists for all three atom categories below.
+
+        Bonded force constants for exclusive and non-native elements:
+
+        ``spring_constant`` (bonds/angles) is **not** annealed to zero for
+        bonds/angles that are exclusive to one state or non-native to the
+        other. Only nonbonded parameters (``sigma``/``epsilon``/``charge``)
+        are scaled for those atoms; bonded terms keep their full physical
+        force constant throughout the whole lambda path. Annealing the
+        bonded restraint alongside the nonbonded one removes the only
+        geometric restraint holding such an atom in place once its
+        nonbonded interactions have also weakened, letting the bond/angle
+        collapse under thermal noise instead of resolving to a well-defined
+        (if alchemically decoupled) position. ``eq_dist``/``eq_angle`` are
+        unaffected by this: bonds/angles fully within the mapped region
+        still interpolate both the force constant and the equilibrium
+        value between the mol1 and mol2 endpoints, since both endpoints
+        are physically defined there.
+
+        Propers and impropers have no such final_state-based interpolation
+        of their own — every proper/improper in the joint topology comes
+        from either topology1 (exclusive) or topology2 (non-native), never
+        both directly. Instead, a torsion pattern (same atoms, periodicity,
+        prefactor and phase — ``Dihedral.__hash__`` deliberately excludes
+        ``constant``) that happens to be present in both topologies ends up
+        duplicated: once from each side. Annealing each copy's constant
+        (``c1*(1-lambda)`` / ``c2*lambda``) and summing the duplicates
+        together further below reproduces exactly the same
+        ``c1*(1-lambda) + c2*lambda`` interpolation bonds/angles get via
+        ``final_state``, even when ``c1 != c2`` — so that annealing is left
+        untouched for duplicated propers/impropers. Only torsions with no
+        duplicate (genuinely unique to one state, with nothing to
+        interpolate towards) are exempted from annealing, for the same
+        collapse-prevention reason as bonds/angles above.
         """
         from copy import deepcopy
+        from collections import Counter
 
         alchemical_topology = deepcopy(self._joint_topology)
 
@@ -429,17 +463,7 @@ class Alchemizer(object):
                 # Atom-state flag: 0 = mapped/common to both states.
                 atom.set_nonpolar_gamma(0.0)
 
-        for bond_idx, bond in enumerate(alchemical_topology.bonds):
-            if bond_idx in self._exclusive_bonds:
-                bond.apply_lambda(["spring_constant", ],
-                                  lambda_set.get_lambda_for_bonded(),
-                                  reverse=False)
-
-            if bond_idx in self._non_native_bonds:
-                bond.apply_lambda(["spring_constant", ],
-                                  lambda_set.get_lambda_for_bonded(),
-                                  reverse=True)
-
+        for bond in alchemical_topology.bonds:
             atom1_idx = bond.atom1_idx
             atom2_idx = bond.atom2_idx
             if (atom1_idx in mol1_mapped_atoms and
@@ -455,17 +479,7 @@ class Alchemizer(object):
                                           reverse=False,
                                           final_state=mol2_bond)
 
-        for angle_idx, angle in enumerate(alchemical_topology.angles):
-            if angle_idx in self._exclusive_angles:
-                angle.apply_lambda(["spring_constant", ],
-                                   lambda_set.get_lambda_for_bonded(),
-                                   reverse=False)
-
-            if angle_idx in self._non_native_angles:
-                angle.apply_lambda(["spring_constant", ],
-                                   lambda_set.get_lambda_for_bonded(),
-                                   reverse=True)
-
+        for angle in alchemical_topology.angles:
             atom1_idx = angle.atom1_idx
             atom2_idx = angle.atom2_idx
             atom3_idx = angle.atom3_idx
@@ -485,8 +499,27 @@ class Alchemizer(object):
                                            reverse=False,
                                            final_state=mol2_angle)
 
+        # A proper is a "duplicate" if the same torsion pattern (atoms,
+        # periodicity, prefactor and phase — constant is deliberately
+        # excluded from Dihedral.__hash__) shows up once from topology1
+        # (exclusive) and once from topology2 (non-native). Annealing
+        # each copy's constant and then summing them below (further down)
+        # is a smooth c1*(1-lambda) + c2*lambda interpolation between
+        # topology1's and topology2's constant for that torsion pattern,
+        # exactly like the final_state-based interpolation mapped
+        # bonds/angles get — it must be left alone even when c1 != c2.
+        # Only genuinely unique torsions (no duplicate in the other
+        # topology) are exempted from annealing: those have no such
+        # interpolation to preserve, and annealing them to zero would
+        # remove their only restraint, letting the torsion collapse.
+        proper_hash_counts = Counter(hash(p)
+                                     for p in alchemical_topology.propers)
+
         # Joint topology cannot have mutual propers
         for proper_idx, proper in enumerate(alchemical_topology.propers):
+            if proper_hash_counts[hash(proper)] == 1:
+                continue
+
             if proper_idx in self._exclusive_propers:
                 proper.apply_lambda(["constant"],
                                     lambda_set.get_lambda_for_bonded(),
@@ -509,8 +542,15 @@ class Alchemizer(object):
                 summative_propers.append(new_proper)
         alchemical_topology._propers = summative_propers
 
+        # Same duplicate-vs-unique reasoning as for propers above
+        improper_hash_counts = Counter(hash(i)
+                                       for i in alchemical_topology.impropers)
+
         # Joint topology cannot have mutual impropers
         for improper_idx, improper in enumerate(alchemical_topology.impropers):
+            if improper_hash_counts[hash(improper)] == 1:
+                continue
+
             if improper_idx in self._exclusive_impropers:
                 improper.apply_lambda(["constant"],
                                       lambda_set.get_lambda_for_bonded(),
@@ -1018,6 +1058,29 @@ class Alchemizer(object):
         very small mapped/core region), the angle and/or dihedral
         cannot be taken from molecule 2 and a best-effort fallback is
         used instead, while the bond length is always preserved.
+
+        As a special case, when the parent of a non-native atom has
+        no other pending (not yet fixed) non-native neighbor, the
+        missing bond direction is instead completed directly from
+        the parent's other, already placed, mapped neighbors: the
+        negated sum of the unit vectors towards them. This is exact
+        whenever those neighbors are themselves arranged with ideal
+        local symmetry (linear, trigonal planar or tetrahedral, as
+        appropriate for the parent), which is typically the case
+        since they are either native atoms or non-native atoms that
+        have already been placed. This is the common case of
+        completing a methyl/methylene group where a substituent
+        exclusive to molecule 1 (e.g. a halogen) is being
+        alchemically swapped for one exclusive to molecule 2 (e.g. a
+        hydrogen), or vice versa. It takes priority over the
+        dihedral-from-molecule-2 approach described above because
+        the latter has no knowledge of where those sibling atoms
+        ended up in the joint topology: PELE will not resample this
+        kind of local geometry, so relying on an independent,
+        unrelated dihedral can leave two substituents of the same
+        parent almost coincident while a third is left too far away,
+        an unphysical clash that would persist for the whole
+        simulation.
         """
         from peleffy.topology.geometry import (calculate_bond_length,
                                                calculate_bond_angle,
@@ -1049,6 +1112,55 @@ class Alchemizer(object):
 
                 if atom.parent is None or atom.parent.index not in fixed:
                     continue
+
+                parent = atom.parent
+
+                # Special case: if no other neighbor of the parent is
+                # still pending, the missing bond direction is fully
+                # constrained by the parent's other (already placed)
+                # mapped neighbors on their own, assuming ideal local
+                # symmetry. Any exclusive (molecule 1-only) neighbor
+                # is skipped here since it occupies the very same
+                # slot that this non-native atom is alchemically
+                # replacing, not a separate one
+                other_pending_non_native = [
+                    n for n in self._graph[parent.index]
+                    if n != atom_idx and n in self._non_native_atoms]
+
+                if not other_pending_non_native:
+                    mapped_siblings = [
+                        n for n in self._graph[parent.index]
+                        if n != atom_idx and n not in self._exclusive_atoms]
+
+                    if len(mapped_siblings) >= 2:
+                        parent_xyz = xyz(parent)
+                        summed = [0.0, 0.0, 0.0]
+                        for sibling_idx in mapped_siblings:
+                            sibling_xyz = xyz(
+                                self._joint_topology.atoms[sibling_idx])
+                            vector = [sibling_xyz[i] - parent_xyz[i]
+                                     for i in range(3)]
+                            norm = sum(v ** 2 for v in vector) ** 0.5
+                            for i in range(3):
+                                summed[i] += vector[i] / norm
+
+                        summed_norm = sum(v ** 2 for v in summed) ** 0.5
+
+                        if summed_norm > 1e-6:
+                            self_mol2_xyz = mol2_xyz(alc_to_mol2[atom_idx])
+                            parent_mol2_xyz = mol2_xyz(
+                                alc_to_mol2[parent.index])
+                            bond = calculate_bond_length(self_mol2_xyz,
+                                                         parent_mol2_xyz)
+
+                            new_xyz = tuple(
+                                parent_xyz[i] - bond * summed[i] / summed_norm
+                                for i in range(3))
+                            atom.set_coords(new_xyz)
+                            fixed.add(atom_idx)
+                            pending.remove(atom_idx)
+                            progressed = True
+                            continue
 
                 # Walk the (already finalized) parent chain, keeping
                 # only the ancestors that also exist in molecule 2,
