@@ -211,7 +211,8 @@ class Topology(object):
                 if proper == proper_to_compare:
                     continue
 
-                if proper_to_compare.atom3_idx < 0:
+                # Already excluded propers must not exclude other ones
+                if proper_to_compare.exclude:
                     continue
 
                 # PELE already ignores 1-4 pair when the proper is exactly
