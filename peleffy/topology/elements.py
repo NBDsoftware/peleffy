@@ -8,6 +8,35 @@ import numbers
 from simtk import unit
 
 
+def canonical_improper_order(atom_idxs, periodicity):
+    """
+    It returns the canonical atom order of an improper torsion term
+    whose central atom is the first one.
+
+    For a central-atom-first improper (c, a, b, d), swapping a and b
+    only changes the sign of the dihedral angle. With an even
+    periodicity the energy is unchanged, so the outer pair is sorted to
+    give every equivalent term the same atom order. This lets the
+    alchemical topology detect the same improper in both end states.
+
+    Parameters
+    ----------
+    atom_idxs : tuple[int, int, int, int]
+        The atom indices of the improper term, central atom first
+    periodicity : int
+        The periodicity of the improper term
+
+    Returns
+    -------
+    atom_idxs : tuple[int, int, int, int]
+        The atom indices in canonical order
+    """
+    central, atom_a, atom_b, atom_d = atom_idxs
+    if periodicity % 2 == 0 and atom_a > atom_b:
+        atom_a, atom_b = atom_b, atom_a
+    return central, atom_a, atom_b, atom_d
+
+
 def _phase_in_degrees(phase):
     """
     Return the numeric value of a phase quantity in degrees.
@@ -1290,6 +1319,19 @@ class Improper(Dihedral):
     _writable_attrs = ['atom1_idx', 'atom2_idx', 'atom3_idx', 'atom4_idx',
                        'constant', 'prefactor', 'periodicity']
     _lambda_changeable = ['constant']
+
+    def canonicalize(self):
+        """
+        It sorts the atom indices of this central-atom-first improper
+        into their canonical order. See canonical_improper_order().
+        """
+        atom_idxs = canonical_improper_order(
+            (self.atom1_idx, self.atom2_idx, self.atom3_idx, self.atom4_idx),
+            self.periodicity)
+        self.set_atom1_idx(atom_idxs[0])
+        self.set_atom2_idx(atom_idxs[1])
+        self.set_atom3_idx(atom_idxs[2])
+        self.set_atom4_idx(atom_idxs[3])
 
 
 class OFFDihedral(_TopologyElement):

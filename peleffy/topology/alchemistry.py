@@ -759,6 +759,10 @@ class Alchemizer(object):
             new_improper.set_atom3_idx(mol2_to_alc_map[atom3_idx])
             new_improper.set_atom4_idx(mol2_to_alc_map[atom4_idx])
 
+            # Remapping can reorder the outer atoms, which would hide a
+            # duplicate of a topology1 improper
+            new_improper.canonicalize()
+
             # Add new improper to the alchemical topology
             non_native_impropers.append(new_index)
             joint_topology.add_improper(new_improper)

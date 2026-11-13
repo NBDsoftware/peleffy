@@ -756,6 +756,8 @@ class OpenForceFieldParameterWrapper(BaseParameterWrapper):
             The resulting parameters wrapper
         """
 
+        from peleffy.topology.elements import canonical_improper_order
+
         I_6R_OF_2 = 0.8908987181403393  # The inverse of the sixth root of 2
 
         def build_dict(parameters, attribute_name):
@@ -966,12 +968,14 @@ class OpenForceFieldParameterWrapper(BaseParameterWrapper):
             idivfs = build_dynamic_dicts(improper_parameters, 'idivf')
             if (periodicities is not None and phases is not None
                     and ks is not None):
-                # idivf is a optional parameter in OpenForceField
+                # idivf is an optional parameter in OpenForceField. When it
+                # is missing, SMIRNOFF's default_idivf="auto" divides k by
+                # the number of improper permutations, which is 3
                 if len(idivfs) == 0:
                     for period_by_index in periodicities:
                         idivfs.append(dict(zip(
                             period_by_index.keys(),
-                            [1, ] * len(period_by_index.keys()))))
+                            [3, ] * len(period_by_index.keys()))))
 
                 for periodicity_by_idx, phase_by_idx, k_by_idx, \
                         idivf_by_idx in zip(periodicities, phases, ks,
@@ -993,16 +997,26 @@ class OpenForceFieldParameterWrapper(BaseParameterWrapper):
 
                         if (periodicity is not None and phase is not None
                                 and k is not None and idivf is not None):
-                            params['impropers'].append(
-                                {'atom1_idx': idx1,
-                                 'atom2_idx': idx2,
-                                 'atom3_idx': idx3,
-                                 'atom4_idx': idx4,
-                                 'periodicity': periodicity,
-                                 'phase': phase,
-                                 'k': k,
-                                 'idivf': idivf
-                                 })
+                            # OpenFF matches impropers with the central
+                            # atom second (idx2), but applies them as three
+                            # torsions with the central atom first, one per
+                            # cyclic permutation of the outer atoms, each
+                            # with k / idivf
+                            outer = (idx1, idx3, idx4)
+                            for i, j, l in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
+                                atom_idxs = canonical_improper_order(
+                                    (idx2, outer[i], outer[j], outer[l]),
+                                    periodicity)
+                                params['impropers'].append(
+                                    {'atom1_idx': atom_idxs[0],
+                                     'atom2_idx': atom_idxs[1],
+                                     'atom3_idx': atom_idxs[2],
+                                     'atom4_idx': atom_idxs[3],
+                                     'periodicity': periodicity,
+                                     'phase': phase,
+                                     'k': k,
+                                     'idivf': idivf
+                                     })
 
         # GBSA parameters
         if 'GBSA' in parameters:
